@@ -249,6 +249,7 @@ import {
   performFindAfterIndexingStarted,
   stopFind
 } from './find-in-page'
+import { partitionIdleReapable } from './pool-reaper'
 import { createFirstRunSetupGate } from './first-run-setup-gate'
 import { registerFsIpc } from './fs-ipc'
 import type {
@@ -12018,8 +12019,9 @@ function touchPoolBackend(profile, options: { activeTurn?: boolean } = {}) {
 // overrides — `entry.process === null`) are excluded from the cap entirely:
 // they hold no local process, so counting them used to let a roster refresh
 // across N registered remote connections LRU-evict a REAL local backend that
-// was merely idle past the keepalive window. Descriptors are still reclaimed
-// by the idle reaper.
+// was merely idle past the keepalive window. Remote descriptors are never
+// reclaimed by the idle reaper either — their death is owned by liveness
+// revalidation (revalidatePooledRemoteBackends), not by an idle timer.
 async function evictLruPoolBackends(keep) {
   return poolRetirer.evictTo(Math.max(0, keep), POOL_KEEPALIVE_FRESH_MS)
 }
@@ -12032,14 +12034,20 @@ function startPoolIdleReaper() {
   poolIdleReaper = setInterval(() => {
     const now = Date.now()
 
-    for (const [profile, entry] of [...backendPool.entries()]) {
-      if (now - (entry.lastActiveAt || 0) > poolIdleMs()) {
-        // Remote descriptors hold no child/slot. Local children require the
-        // same admission authority as foreground and LRU reclamation.
-        const retiring = entry.process ? poolRetirer.retireIdle(profile, poolIdleMs()) : stopPoolBackend(profile)
+    // Remote pool entries (no local child process) are never idle-reaped: an
+    // idle-but-healthy remote backend is indistinguishable from a dead one to
+    // a timer, and reaping it silently strands the renderer's open sessions.
+    // Dead remotes are dropped by the liveness revalidation instead
+    // (revalidatePooledRemoteBackends / revalidateSuspectPoolAfterResume).
+    const { reap } = partitionIdleReapable(backendPool, now, poolIdleMs())
 
-        void retiring.catch(error => rememberLog(`Pool idle retirement failed: ${String(error)}`))
-      }
+    for (const { profile, idleMs } of reap) {
+      // Local children require the same admission authority as foreground and
+      // LRU reclamation: the retirer proves the backend is safe to stop.
+      rememberLog(`Retiring idle profile backend "${profile}" (idle > ${idleMs}s)`)
+      void poolRetirer
+        .retireIdle(profile, poolIdleMs())
+        .catch(error => rememberLog(`Pool idle retirement failed: ${String(error)}`))
     }
 
     if (backendPool.size === 0 && poolIdleReaper) {
