@@ -3747,6 +3747,8 @@ export const zhHant = defineLocale({
 
   preview: {
     tab: '預覽',
+    pin: '固定到工作區',
+    unpin: '從工作區取消固定',
     closePane: '關閉預覽窗格',
     loading: '正在載入預覽',
     unavailable: '預覽不可用',
