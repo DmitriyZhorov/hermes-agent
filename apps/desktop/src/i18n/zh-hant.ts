@@ -3236,6 +3236,7 @@ export const zhHant = defineLocale({
       scopeUncommitted: '未提交',
       scopeBranch: '分支',
       scopeLastTurn: '上一輪',
+      readOnlyScope: '唯讀檢視 — 暫存、還原和提交操作僅適用於「未提交」',
       commit: '提交',
       commitAndPush: '提交並推送',
       commitPlaceholder: shortcut => `訊息（${shortcut} 提交）`,
