@@ -1,6 +1,11 @@
 import { atom, computed } from 'nanostores'
 
 import { dismissTreePane, isPaneVisible } from '@/components/pane-shell/tree/store'
+import {
+  capturePreviewAnnotateDestination,
+  clearPreviewAnnotateDestination,
+  rememberPreviewAnnotateDestination
+} from '@/lib/preview-annotate/handoff'
 import { readJson, writeKey } from '@/lib/storage'
 import { normalize } from '@/lib/text'
 
@@ -489,6 +494,13 @@ export function popOutBrowserTab(tabId: string) {
 
   const page = $browserPages.get()[tabId]
 
+  // Pin the exact chat/group surface that owns this Browser before the new
+  // renderer opens. Comment Mode in the pop-out uses this route to hand its
+  // saved batch back without guessing from whichever composer is active later.
+  const anchor =
+    typeof document !== 'undefined' && document.activeElement instanceof Element ? document.activeElement : null
+
+  rememberPreviewAnnotateDestination(tabId, capturePreviewAnnotateDestination(anchor))
   markBrowserTabPopped(tabId, true)
   commitBrowserTabLocation(tabId, page?.url || tab.target.url, page?.title)
   void openBrowserInNewWindow(tabId).then(ok => {
@@ -516,6 +528,7 @@ export function markBrowserTabPopped(tabId: string, popped: boolean) {
     next.add(tabId)
   } else {
     next.delete(tabId)
+    clearPreviewAnnotateDestination(tabId)
   }
 
   $poppedBrowserTabIds.set(next)
