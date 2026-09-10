@@ -409,6 +409,8 @@ def load_hermes_dotenv(
     # home must be the launch home: a launch-targeted load inside a FOREIGN turn re-bridges terminal.*
     # from the config the override resolves to, i.e. the routed profile's cwd into the shared env.
     # External sources still refresh against the profile mapping.
+    # (``is_multiplex_active()`` is also true, context-locally, for a routed cron fire in the desktop
+    # backend — see ``cron.scheduler_provider._profile_cron_scope``.)
     from agent.secret_scope import is_multiplex_active
     from hermes_constants import get_hermes_home, get_hermes_home_override
 
