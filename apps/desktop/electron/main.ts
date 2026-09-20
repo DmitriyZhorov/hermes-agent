@@ -126,6 +126,7 @@ import { installCommandScreenshot } from './command-screenshot'
 import { composerImageTimestamp } from './composer-image-name'
 import { writeComposerPaste } from './composer-paste'
 import { applyConnectionChange, teardownSshState } from './connection-apply'
+import { registerDeepLinkProtocol } from './deep-link-protocol'
 import {
   connectionInstallIds,
   evictConnectionCaches,
@@ -1624,6 +1625,12 @@ app.setName(APP_NAME)
 // (#115332). Must run at module scope: on macOS a later `null` never removes
 // an installed menu. The real menu lands in installApplicationMenuAfterFirstWindow.
 Menu.setApplicationMenu(null)
+
+// Linux window identity: the window's desktop-file association is pinned to the
+// installed launcher entry through the `desktopName` field in package.json
+// (Electron reads it; the default `{app.name}.desktop` would follow a
+// customized HERMES_DESKTOP_APP_NAME and miss hermes.desktop). Dev builds keep
+// registering hermes-dev:// as the protocol scheme.
 
 // Windows toast notifications silently no-op unless an AppUserModelID is set:
 // `new Notification().show()` returns without error and nothing appears. The
@@ -19036,19 +19043,28 @@ ipcMain.handle('hermes:deep-link-ready', () => {
   return { ok: true }
 })
 
-function registerDeepLinkProtocol() {
+function registerDeepLinkProtocolHandler() {
   try {
-    if (process.defaultApp && process.argv.length >= 2) {
-      // Dev: register with the electron exec path + entry script so the OS can
-      // relaunch us with the URL. argv[1] is usually "." when launched via
-      // `electron .` from apps/desktop — resolve against cwd.
-      const entry = path.resolve(process.argv[1])
-      app.setAsDefaultProtocolClient(HERMES_PROTOCOL, process.execPath, [entry])
-    } else {
-      app.setAsDefaultProtocolClient(HERMES_PROTOCOL)
-    }
+    const registered = registerDeepLinkProtocol(app, {
+      protocol: HERMES_PROTOCOL,
+      defaultApp: Boolean(process.defaultApp),
+      argv: process.argv,
+      execPath: process.execPath,
+      resolve: p => path.resolve(p)
+    })
 
-    rememberLog(`[deeplink] registered ${HERMES_PROTOCOL}:// handler`)
+    if (registered) {
+      rememberLog(`[deeplink] registered ${HERMES_PROTOCOL}:// handler`)
+    } else {
+      // The API reports whether the claim actually took. On Linux the real
+      // association comes from the installed hermes.desktop entry (written by
+      // `hermes desktop`), so a false here leaves capture with that entry —
+      // never claim a registration the OS did not accept.
+      rememberLog(
+        `[deeplink] ${HERMES_PROTOCOL}:// handler was NOT registered by the OS ` +
+          '(Linux: the hermes.desktop launcher entry owns the association)'
+      )
+    }
   } catch (err) {
     rememberLog(`[deeplink] protocol registration failed: ${err.message}`)
   }
@@ -19181,7 +19197,7 @@ app.whenReady().then(() => {
   installRemoteHeaderRules()
 
   if (!preReadyDockSteps.includes('register-deep-link')) {
-    registerDeepLinkProtocol()
+    registerDeepLinkProtocolHandler()
   }
 
   installPreviewGuestEscapeHatch()
