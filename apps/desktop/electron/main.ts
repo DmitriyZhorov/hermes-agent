@@ -55,7 +55,15 @@ import {
 } from './app-version'
 import { runAppInstallerChecker } from './appinstaller-checker'
 import { installApplicationMenuAfterFirstWindow } from './application-menu-startup'
-import { stopBackendChild as stopBackendChildImpl, waitForBackendExit } from './backend-child'
+import {
+  describeAbruptBackendExit,
+  describeRecentTreeKills,
+  formatTreeKillLine,
+  noteTreeKill,
+  stopBackendChild as stopBackendChildImpl,
+  type BackendTreeKillReason,
+  waitForBackendExit
+} from './backend-child'
 import {
   type BackendOutputTail,
   claimDecision,
@@ -73,14 +81,15 @@ import { createBackendConnectionState } from './backend-connection-state'
 import { BackendDialClaims } from './backend-dial-claim'
 import type { HostBackendRecord } from './backend-discovery'
 import { buildDesktopBackendEnv, profileBackendParentEnv } from './backend-env'
-import { createBackendExitRecoveryLatch, shouldNotifySupersededBackendExit } from './backend-exit-recovery' 
+import { createBackendExitRecoveryLatch, shouldNotifySupersededBackendExit } from './backend-exit-recovery'
 import { isReauthRequiredError, waitForHermesReady } from './backend-health'
 import {
   backendCommandMatches,
   type BackendOwnershipEntry,
   createBackendOwnership,
-  createBackendShutdownCoordinator
-} from './backend-ownership'
+  createBackendShutdownCoordinator,
+  parseBackendOwnership
+} from './backend-ownership' 
 import { canImportHermesCli, PROBE_TIMEOUT_MS, shouldTrustHermesOverride, verifyHermesCli } from './backend-probes'
 import { waitForDashboardPortAnnouncement } from './backend-ready'
 import { recycleOwnedBackend } from './backend-recycle'
@@ -1636,9 +1645,13 @@ let mainWindow = null
 const backendConnectionState = createBackendConnectionState<ReturnType<typeof spawn>, any>()
 
 const localBackendLifecycle = createLocalBackendLifecycle<ChildProcess>({
-  stopChild: (child: ChildProcess): void => {
+  stopChild: (child: ChildProcess, reason?: string): void => {
     if (child.exitCode === null && child.signalCode === null) {
-      stopBackendChildImpl(child, { forceKillProcessTree, isWindows: IS_WINDOWS })
+      stopBackendChildImpl(
+        child,
+        { forceKillProcessTree, isWindows: IS_WINDOWS },
+        { reason: (reason as BackendTreeKillReason | undefined) ?? 'unknown' }
+      )
     }
   },
   waitForExit: (child: ChildProcess): Promise<void> =>
@@ -3880,7 +3893,7 @@ function killHermesOwnedVenvDaemons(updateRoot) {
       rememberLog(`[updates] stopping Hermes-owned venv daemon (hindsight) PID ${pid} before hand-off`)
 
       try {
-        forceKillProcessTree(pid)
+        forceKillProcessTree(pid, 'update-handoff')
       } catch (error) {
         // Update hand-off only. Close/stop must not swallow this; see
         // windowsCloseStopOwnedBackends.
@@ -3926,7 +3939,7 @@ function killExternalVenvHolders(updateRoot) {
       )
 
       try {
-        forceKillProcessTree(pid)
+        forceKillProcessTree(pid, 'update-handoff')
       } catch (error) {
         rememberLog(`[updates] taskkill PID ${pid} failed: ${error instanceof Error ? error.message : String(error)}`)
       }
@@ -3944,7 +3957,7 @@ function killExternalVenvHolders(updateRoot) {
 // close/stop paths, and the backend is NOT spawned detached (so it's not a
 // process-group leader — a POSIX negative-pgid kill would be meaningless
 // here anyway). POSIX teardown stays with the existing before-quit SIGTERM.
-function forceKillProcessTree(pid) {
+function forceKillProcessTree(pid, reason: BackendTreeKillReason = 'unknown') {
   if (!IS_WINDOWS) {
     return
   }
@@ -3952,6 +3965,12 @@ function forceKillProcessTree(pid) {
   if (!Number.isInteger(pid) || pid <= 0) {
     return
   }
+
+  // Attribute the kill BEFORE taskkill runs (#119440): a backend child that
+  // later exits -1/4294967295 with empty stderr names this killer + reason
+  // instead of respawning blind into a contested port.
+  noteTreeKill(pid, reason)
+  rememberLog(formatTreeKillLine(pid, reason))
 
   execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], hiddenWindowsChildOptions({ stdio: 'ignore' }))
 }
@@ -4068,6 +4087,41 @@ function windowsCloseStopOwnedBackends(children: ChildProcess[]): Error | null {
   }
 }
 
+/**
+ * Ownership snippet for an abruptly dead backend (#119440): was the dead pid
+ * one WE spawned (parentPid === this Electron process) or a sibling
+ * instance's / foreign child? Best-effort; never throws out of an exit
+ * handler.
+ */
+function describeBackendOwnerForExit(pid) {
+  if (!Number.isInteger(pid)) {
+    return 'owner(unrecorded: child had no pid)'
+  }
+
+  try {
+    const entries = parseBackendOwnership(fs.readFileSync(DESKTOP_BACKEND_OWNERSHIP_PATH, 'utf8'))
+    const entry = entries.find(candidate => candidate.pid === pid)
+
+    if (!entry) {
+      return 'owner(no ownership record for this pid)'
+    }
+
+    const whose = entry.parentPid === process.pid ? 'this-process' : `other pid ${entry.parentPid ?? '?'}`
+    return `owner(profile=${entry.profile} parentPid=${entry.parentPid ?? '?'} ${whose})`
+  } catch {
+    return 'owner(unreadable ownership file)'
+  }
+}
+
+function abruptBackendExitSuffix(code, signal, pid) {
+  return describeAbruptBackendExit({
+    code,
+    ownerText: describeBackendOwnerForExit(pid),
+    recentText: describeRecentTreeKills(),
+    signal
+  })
+}
+
 function writeBackendOwnership(contents) {
   fs.mkdirSync(path.dirname(DESKTOP_BACKEND_OWNERSHIP_PATH), { recursive: true })
   const tempPath = `${DESKTOP_BACKEND_OWNERSHIP_PATH}.${process.pid}.tmp`
@@ -4175,7 +4229,7 @@ async function stopOwnedBackend(identity) {
 
   if (IS_WINDOWS) {
     try {
-      forceKillProcessTree(identity.pid)
+      forceKillProcessTree(identity.pid, 'orphan-reap')
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
       const stillThere = await processIdentityMatches(identity, REAP_PROBE_TIMEOUT_MS)
@@ -10870,6 +10924,12 @@ function resetBootProgressForReconnect() {
   )
 }
 
+function stopBackendChild(child, reason: BackendTreeKillReason = 'unknown') {
+  void localBackendLifecycle
+    .stop(child, reason)
+    .catch(error => rememberLog(`Backend teardown failed: ${error.message}`))
+}
+
 // Reset routing and UI state only. Local callers must await physical teardown.
 // Remote revalidation has no local child and can reset this state directly.
 function resetHermesConnectionState({ soft = false }: { soft?: boolean } = {}): void {
@@ -10898,7 +10958,12 @@ function invalidatePrimaryConnection() {
 // startHermes() spawns fresh instead of racing the dying one. Shared by the
 // connection-config and profile switch flows.
 async function teardownPrimaryBackendAndWait({ soft = false }: { soft?: boolean } = {}): Promise<void> {
-  const stopping = backendConnectionState.stopProcess(localBackendLifecycle.stop)
+  // Reason for the tree-kill ledger (#119440): `soft` is true exactly when
+  // the intent is 'quit' (backendTeardownOptions), i.e. nothing comes back.
+  // Every other caller re-homes or hands off to a replacement backend.
+  const stopping = backendConnectionState.stopProcess((current): Promise<void> =>
+    localBackendLifecycle.stop(current, soft ? 'quit' : 'unknown')
+  )
 
   if (soft) {
     softRehomeInProgress = true
@@ -12071,7 +12136,7 @@ function teardownFailedLocalBackend(poolKey: string, entry: any): Promise<void> 
   const teardown = releaseLocalBackendSlotAfterExit(
     (): void => releaseLocalBackendSlot(entry),
     async (): Promise<void> => {
-      await localBackendLifecycle.stop(child)
+      await localBackendLifecycle.stop(child, 'pool-stop')
 
       releaseBackendChild(child)
     }
@@ -12338,7 +12403,7 @@ async function runPoolBackendStart(
     rejectStart?.(error)
   })
   child.once('exit', (code, signal) => {
-    rememberLog(formatBackendExitLine(`Hermes backend for profile "${profile}" exited`, code, signal, outputTail))
+    rememberLog(formatBackendExitLine(`Hermes backend for profile "${profile}" exited`, code, signal, outputTail, abruptBackendExitSuffix(code, signal, child.pid)))
     releaseBackendChild(child)
 
     if (!ready) {
@@ -12440,9 +12505,9 @@ const poolStopper = createPoolStopper({
   // there, so the same in-flight fence carries only the bootstrap drain +
   // SSH teardown below (#106935).
   stopChild: child => {
-    void localBackendLifecycle.stop(child as ChildProcess | null | undefined)
+    void localBackendLifecycle.stop(child as ChildProcess | null | undefined, 'pool-stop')
   },
-  waitForExit: child => localBackendLifecycle.stop(child as ChildProcess | null | undefined),
+  waitForExit: child => localBackendLifecycle.stop(child as ChildProcess | null | undefined, 'pool-stop'),
   afterStop: async key => {
     try {
       await sshBootstrapCoordinator.cancelAndWait(key, () => teardownSshConnection(key))
@@ -12549,6 +12614,8 @@ const backendShutdown = createBackendShutdownCoordinator(async (): Promise<void>
   const localShutdown = localBackendLifecycle.shutdown()
   const primary = backendConnectionState.getProcess()
   const primaryStop = teardownPrimaryBackendAndWait(backendTeardownOptions('quit'))
+
+  stopBackendChild(primary, 'quit')
   const pooledStops = stopAllPoolBackends()
 
   if (poolIdleReaper) {
@@ -13233,7 +13300,7 @@ async function runHermesStart({ supervisorRecovery = false }: { supervisorRecove
     )
 
     if (!processOwner) {
-      await localBackendLifecycle.stop(hermesProcess)
+      await localBackendLifecycle.stop(hermesProcess, 'superseded-start')
       releaseBackendChild(hermesProcess)
       throw new Error('Hermes backend start was superseded by a newer connection attempt.')
     }
@@ -13280,7 +13347,7 @@ async function runHermesStart({ supervisorRecovery = false }: { supervisorRecove
       releaseBackendChild(hermesProcess)
 
       if (!backendConnectionState.clearForCurrentProcess(processOwner)) {
-        rememberLog(formatBackendExitLine('Ignoring stale Hermes backend exit', code, signal, primaryOutputTail))
+        rememberLog(formatBackendExitLine('Ignoring stale Hermes backend exit', code, signal, primaryOutputTail, abruptBackendExitSuffix(code, signal, hermesProcess.pid)))
 
         const recovered = scheduleUnexpectedPrimaryRecovery({ code, signal, ready: backendReady })
 
@@ -13305,7 +13372,7 @@ async function runHermesStart({ supervisorRecovery = false }: { supervisorRecove
         return
       }
 
-      rememberLog(formatBackendExitLine('Hermes backend exited', code, signal, primaryOutputTail))
+      rememberLog(formatBackendExitLine('Hermes backend exited', code, signal, primaryOutputTail, abruptBackendExitSuffix(code, signal, hermesProcess.pid)))
 
       // The current primary child is gone; release its routing pin so the
       // next startHermes() re-reads active-profile.json instead of re-pinning
@@ -13425,7 +13492,7 @@ async function runHermesStart({ supervisorRecovery = false }: { supervisorRecove
     // a newer attempt's pin (#108417).
     primaryProfilePin.clear()
 
-    await backendConnectionState.stopProcess(localBackendLifecycle.stop)
+    await backendConnectionState.stopProcess((current): Promise<void> => localBackendLifecycle.stop(current, 'unknown'))
 
     if (error instanceof FirstRunSetupResetError) {
       throw error
