@@ -73,7 +73,7 @@ import { createBackendConnectionState } from './backend-connection-state'
 import { BackendDialClaims } from './backend-dial-claim'
 import type { HostBackendRecord } from './backend-discovery'
 import { buildDesktopBackendEnv, profileBackendParentEnv } from './backend-env'
-import { createBackendExitRecoveryLatch } from './backend-exit-recovery'
+import { createBackendExitRecoveryLatch, shouldNotifySupersededBackendExit } from './backend-exit-recovery' 
 import { isReauthRequiredError, waitForHermesReady } from './backend-health'
 import {
   backendCommandMatches,
@@ -13282,7 +13282,21 @@ async function runHermesStart({ supervisorRecovery = false }: { supervisorRecove
       if (!backendConnectionState.clearForCurrentProcess(processOwner)) {
         rememberLog(formatBackendExitLine('Ignoring stale Hermes backend exit', code, signal, primaryOutputTail))
 
-        scheduleUnexpectedPrimaryRecovery({ code, signal, ready: backendReady })
+        const recovered = scheduleUnexpectedPrimaryRecovery({ code, signal, ready: backendReady })
+
+        if (
+          shouldNotifySupersededBackendExit({
+            ready: backendReady,
+            intentionalTeardown: primaryRecoveryState().intentionalTeardown,
+            recovered
+          })
+        ) {
+          // A replacement is already in flight (renderer re-dial) or a new
+          // owner holds the slot, so the supervisor respawned nothing and no
+          // exit payload was sent — yet the backend this chat was talking to
+          // died. Tell the renderer once (#118784).
+          sendBackendExit({ code, signal })
+        }
 
         if (!backendReady) {
           rejectBackendStart?.(new Error('Hermes backend start was superseded by a newer connection attempt.'))
