@@ -5475,6 +5475,7 @@ export const frOverrides = {
       branchNewChat: 'Créer une branche dans une nouvelle conversation',
       react: 'Réagir',
       dismissError: "Ignorer l'erreur",
+      responseStopped: 'Réponse interrompue',
       errorLayers: {
         auth: "Erreur d'authentification",
         billing: 'Crédits épuisés',
