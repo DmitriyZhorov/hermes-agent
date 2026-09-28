@@ -360,7 +360,7 @@ def test_a_routed_profile_script_never_receives_a_launch_only_name(hermes_env, m
     # Under the routed home override the runner resolves scripts against THAT profile's scripts dir.
     script = routed / "scripts" / "probe_launch_only.sh"
     script.write_text(
-        '#!/bin/bash\necho "${CUSTOM_CRON_VALUE}|${ROUTED_VAULT_ONLY}|${LAUNCH_ONLY_VALUE:-<unset>}'
+        '#!/usr/bin/env bash\necho "${CUSTOM_CRON_VALUE}|${ROUTED_VAULT_ONLY}|${LAUNCH_ONLY_VALUE:-<unset>}'
         '|${LAUNCH_VAULT_ONLY:-<unset>}|${LAUNCH_SKIPPED_SECRET:-<unset>}"\n'
     )
 
@@ -406,7 +406,7 @@ def test_a_routed_profile_script_keeps_administrator_managed_values_over_its_own
     routed = launch / "profiles" / "ops"
     (routed / "scripts").mkdir(parents=True, exist_ok=True)
     script = routed / "scripts" / "probe_policy.sh"
-    script.write_text('#!/bin/bash\necho "${ORG_POLICY_FLAG:-<unset>}"\n')
+    script.write_text('#!/usr/bin/env bash\necho "${ORG_POLICY_FLAG:-<unset>}"\n')
 
     home_token = set_hermes_home_override(str(routed))
     context_token = secret_scope.set_multiplex_context(True)
