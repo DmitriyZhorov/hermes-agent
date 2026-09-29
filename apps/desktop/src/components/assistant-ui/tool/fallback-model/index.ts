@@ -751,9 +751,18 @@ function durationLabel(resultRecord: Record<string, unknown>): string | undefine
   return formatDurationSeconds(seconds)
 }
 
+const NON_DELIVERABLE_TOOLS = new Set([
+  'annotate_preview',
+  'drive_preview',
+  'gui_tour',
+  'list_files',
+  'read_file',
+  'search_files'
+])
+
 function toolPreviewTarget(toolName: string, args: Record<string, unknown>, result: Record<string, unknown>): string {
   // Reading an existing file is not producing a deliverable.
-  if (toolName === 'read_file' || toolName === 'search_files' || toolName === 'list_files') {
+  if (NON_DELIVERABLE_TOOLS.has(toolName) || (toolName === 'desktop_preview' && args.action !== 'open')) {
     return ''
   }
 
