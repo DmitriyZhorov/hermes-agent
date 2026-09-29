@@ -145,7 +145,9 @@ export function useComposerQueue({
     const next = queuedPrompts[target]
 
     if (next) {
-      setQueueEditSnapshot({ ...queueEdit, entryId: next.id })
+      // Re-base the dirty check on the entry now under edit, or a clean buffer
+      // on `next` reads as dirty against the entry we just left (#88621).
+      setQueueEditSnapshot({ ...queueEdit, entryId: next.id, entryText: next.displayText ?? next.text })
       loadIntoComposer(next.displayText ?? next.text, next.attachments)
     } else {
       setQueueEditSnapshot(null)

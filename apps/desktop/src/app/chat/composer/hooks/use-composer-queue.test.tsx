@@ -1,6 +1,7 @@
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { $salvagedEditNotice, undoSalvagedEdit } from '@/store/composer'
 import {
   $parkedQueueSessions,
   $queuedPromptsBySession,
@@ -11,7 +12,6 @@ import {
   parkQueuedPrompts,
   removeQueuedPrompt
 } from '@/store/composer-queue'
-import { $salvagedEditNotice, undoSalvagedEdit } from '@/store/composer'
 import { setSessionsLoading } from '@/store/session'
 
 import type { QueueEditState } from '../composer-utils'
@@ -469,6 +469,52 @@ describe('useComposerQueue park integration', () => {
     // Undo while the composer still shows the repainted draft puts the typed
     // text back; after the user typed something new it only dismisses.
     expect(undoSalvagedEdit('')).toBe('replacement text typed over a minute')
+    expect($salvagedEditNotice.get()).toBeNull()
+  })
+
+  it('re-bases the dirty check on the entry reached by ArrowUp/ArrowDown (#88621)', () => {
+    // Stepping to a neighbour repaints that entry's text; a buffer the user
+    // has NOT touched since must read as clean against the new entry, or a
+    // plain Esc publishes a spurious salvage notice for text nobody typed.
+    const older = enqueueQueuedPrompt(SESSION_KEY, { attachments: [], text: 'older words' })!
+    const newer = enqueueQueuedPrompt(SESSION_KEY, { attachments: [], text: 'newer words' })!
+
+    const queueEditRef: { current: QueueEditState | null } = { current: null }
+    const draftRef = { current: '' }
+
+    const hook = renderHook(() =>
+      useComposerQueue({
+        activeQueueSessionKey: SESSION_KEY,
+        attachments: [],
+        busy: false,
+        clearDraft: () => undefined,
+        draftRef,
+        focusInput: () => undefined,
+        loadIntoComposer: (text: string) => {
+          draftRef.current = text
+        },
+        onCancel: vi.fn(),
+        onSteer: undefined,
+        onSubmit: vi.fn(async () => true),
+        queueEditRef,
+        queueSessionKey: SESSION_KEY,
+        sessionId: 'rt-session-queue-hook'
+      })
+    )
+
+    act(() => {
+      hook.result.current.beginQueuedEdit(newer)
+    })
+    act(() => {
+      hook.result.current.stepQueuedEdit(-1)
+    })
+    expect(queueEditRef.current?.entryId).toBe(older.id)
+    expect(draftRef.current).toBe('older words')
+
+    act(() => {
+      hook.result.current.exitQueuedEdit('cancel')
+    })
+
     expect($salvagedEditNotice.get()).toBeNull()
   })
 })
