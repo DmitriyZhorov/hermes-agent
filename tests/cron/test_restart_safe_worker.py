@@ -340,7 +340,6 @@ def test_launch_external_worker_treats_a_routed_fire_as_multiplexed(tmp_path, mo
     monkeypatch.setenv("LAUNCH_ONLY_SECRET", "launch-secret")
     monkeypatch.setattr(scheduler, "_get_hermes_home", lambda: routed)
     monkeypatch.setattr(hermes_constants, "get_process_hermes_home", lambda: launch)
-    monkeypatch.setattr("cron.scheduler_provider.routed_profile_fire", lambda: True)
     monkeypatch.setattr(
         "tools.process_registry.restart_safe_gateway_child_argv",
         lambda command, *, unit_suffix, require_restart_safe_scope=False: GatewayChildDispatch(

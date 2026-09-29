@@ -6,7 +6,6 @@ execution + delivery stay in cron.scheduler.run_job / _deliver_result; never rei
 from __future__ import annotations
 
 import contextlib
-from contextvars import ContextVar
 import inspect
 import logging
 import threading
@@ -93,38 +92,35 @@ def _existing_profile_homes(profile_homes: list) -> list:
     return [entry for entry in profile_homes if Path(_profile_entry(entry)[1]).is_dir()]
 
 
-# Set by _profile_cron_scope: this task fires a profile OTHER than the process's own. A marker only.
-# Multiplex semantics are switched on where the profile's secret scope is installed
-# (cron.scheduler._install_fire_secret_scope) and off with it — never at the tick — so no read can
-# be fail-closed without a scope to read: run_one_job's restart-safe handoff runs before that
-# scope and keeps today's semantics (its own scope is #107413 / #106050's seam).
-_ROUTED_PROFILE_FIRE: ContextVar[bool] = ContextVar("_ROUTED_PROFILE_FIRE", default=False)
+def routed_profile_fire(home=None) -> bool:
+    """True when a fire runs for a profile OTHER than the process's own.
 
+    Derived from the fire's home itself (``home``, else the task's active ``get_hermes_home()``), never from
+    a marker one entry point sets: the desktop ticker (``_profile_cron_scope``), the dashboard's
+    manual Run now (``hermes_cli.web_server_cron._cron_store_scope``) and any other caller that
+    binds a HERMES_HOME override for a sibling profile all reach ``run_one_job`` the same way, and a
+    marker set only in the ticker left the manual path with the original cross-profile leak.
 
-def routed_profile_fire() -> bool:
-    """True inside a tick for a profile other than the process's own (marker, see above)."""
-    return _ROUTED_PROFILE_FIRE.get()
+    The desktop backend fires every local profile from one process without setting the
+    process-global multiplex flag, so every isolation keyed on ``is_multiplex_active()`` was inert
+    for those fires: a sibling profile's ``.env`` landed in the shared ``os.environ`` with
+    ``override=True`` and a scope miss read the launch profile's credentials (#107692).
+    ``cron.scheduler._install_fire_secret_scope`` turns this into multiplex semantics for exactly
+    the span the profile's secret scope covers, and the restart-safe handoff marks the worker
+    payload with it. The launch identity is ``get_routing_process_hermes_home()`` (gateway/AGENTS.md
+    "One launch-home identity")."""
+    from hermes_constants import get_hermes_home, get_routing_process_hermes_home, hermes_home_key
+
+    target = home if home is not None else get_hermes_home()
+    return hermes_home_key(target) != hermes_home_key(get_routing_process_hermes_home())
 
 
 @contextlib.contextmanager
 def _profile_cron_scope(home):
-    """Scope the calling thread to one profile's home + cron store for the block.
-
-    A profile OTHER than the process's own is MARKED as a routed fire (``routed_profile_fire``).
-    The desktop backend ticks every local profile from one process "like a multiplex gateway"
-    without setting the process-global multiplex flag, so every isolation keyed on
-    ``is_multiplex_active()`` was inert for those fires: a sibling profile's ``.env`` landed in
-    the shared ``os.environ`` with ``override=True`` and a scope miss read the launch profile's
-    credentials (#107692). ``cron.scheduler._install_fire_secret_scope`` turns the marker into
-    multiplex semantics for exactly the span the profile's secret scope covers. The process's own
-    profile keeps single-profile semantics. The override and the marker both reach the pool
-    worker via ``copy_context()``. Under a real multiplexer the process flag is already on."""
+    """Scope the calling thread to one profile's home + cron store for the block."""
     from cron.jobs import use_cron_store
-    from hermes_constants import (
-        get_routing_process_hermes_home, reset_hermes_home_override, set_hermes_home_override)
+    from hermes_constants import set_hermes_home_override, reset_hermes_home_override
 
-    routed = Path(home).resolve() != get_routing_process_hermes_home().resolve()
-    routed_token = _ROUTED_PROFILE_FIRE.set(routed)
     # Record per-profile heartbeat after each tick cycle. Distinguish a COMPLETED cycle (``_tick_error``
     # unset) — where each profile's beat reflects its own outcome, so a yielding profile does not darken
     # healthy siblings — from an aborted one (exception), where no profile completed and all beats are
@@ -135,7 +131,6 @@ def _profile_cron_scope(home):
             yield
     finally:
         reset_hermes_home_override(home_token)
-        _ROUTED_PROFILE_FIRE.reset(routed_token)
 
 
 class CronScheduler(ABC):

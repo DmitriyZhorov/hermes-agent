@@ -3161,8 +3161,8 @@ def _install_fire_secret_scope() -> "tuple[contextvars.Token, Optional[contextva
     gateway/run.py and the external cron worker already use: ``build_profile_secret_scope`` only
     READS the per-home source map, so a scope frozen first would carry no vault-backed value.
 
-    For a fire routed to a profile other than the process's own (marked by
-    ``cron.scheduler_provider._profile_cron_scope``) also run under multiplex semantics — for
+    For a fire routed to a profile other than the process's own (``routed_profile_fire`` on the
+    fire's home — every entry point: ticker, dashboard Run now, CLI) also run under multiplex semantics — for
     exactly this span and no wider. The desktop backend ticks every local profile from a process
     that is not a multiplexer, so nothing else isolates that fire; and switching the context on
     here rather than at the tick means no read is ever fail-closed without a scope to read — the
