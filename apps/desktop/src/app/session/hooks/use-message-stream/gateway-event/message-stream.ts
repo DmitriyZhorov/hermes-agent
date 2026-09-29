@@ -134,6 +134,26 @@ export function handleMessageStreamEvent(ctx: GatewayEventContext): boolean {
         return state
       }
 
+      // The previous turn's in-flight bubble id must not leak into the new
+      // turn (#101321). On a provider stream drop (Grok) the terminal frame
+      // never arrives, so state.streamId can still name the old turn's
+      // bubble when this turn starts — mutateStream would then append the
+      // new turn's deltas into the previous answer below the new prompt.
+      // When that bubble sits above the newest user row it is previous-turn
+      // territory: release it and let the first payload seed a fresh bubble.
+      // A same-turn id keeps streaming: a steer rebuild or chained turn has
+      // no new user row, the queued-prompt projection's live row sits below
+      // the projected prompt, and the flush above may have just seeded the
+      // id with real output of the turn now starting.
+      const lastUserIndex = state.messages.findLastIndex(
+        message => message.role === 'user' && message.id !== `user-queued-${sessionId}`
+      )
+
+      const streamTargetIndex =
+        state.streamId !== null ? state.messages.findIndex(message => message.id === state.streamId) : -1
+
+      const staleStreamId = streamTargetIndex >= 0 && streamTargetIndex < lastUserIndex
+
       return {
         ...state,
         busy: true,
@@ -147,6 +167,9 @@ export function handleMessageStreamEvent(ctx: GatewayEventContext): boolean {
         // A new turn is a new occurrence: the previous turn's late terminal
         // frame (#119569) can no longer claim its heartbeat-settled bubble.
         heartbeatSettledStreamId: null,
+        // Release a previous-turn bubble id so the new turn seeds its own
+        // bubble instead of appending into the old answer (#101321).
+        ...(staleStreamId ? { streamId: null } : {}),
         // Keep the submit-time seed (submit.ts seedOptimistic) — resetting
         // here would hide the submit→accept round trip from the timer.
         // Backend-originated turns (queue drain elsewhere, goal follow-up)
