@@ -15,6 +15,7 @@ import { triggerHaptic } from '@/lib/haptics'
 import { setMutableRef } from '@/lib/mutable-ref'
 import { normalize } from '@/lib/text'
 import { transcribeAudioClientDirect } from '@/lib/voice-client-direct'
+import { recoverClarifyDrafts } from '@/app/session/clarify-draft-recovery'
 import { clearClarifyRequest } from '@/store/clarify'
 import { setSessionCompacting } from '@/store/compaction'
 import {
@@ -727,9 +728,11 @@ export function usePromptActions({
     // Stop ends the turn, so the gateway is no longer blocked on any prompt it
     // raised. Drop this session's pending clarify / approval / sudo / secret so
     // a dead panel (and the sidebar "needs input" dot) can't linger and accept
-    // an answer the backend will reject.
+    // an answer the backend will reject. A clarify the user was mid-answering
+    // is salvaged into the session draft first — Stop must not destroy typed
+    // work (#58783).
     clearAllPrompts(sessionId)
-    clearClarifyRequest(undefined, sessionId)
+    recoverClarifyDrafts(clearClarifyRequest(undefined, sessionId), activeSessionIdRef)
 
     try {
       await withSessionNotFoundResume(

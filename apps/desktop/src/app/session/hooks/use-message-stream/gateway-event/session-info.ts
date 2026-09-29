@@ -2,6 +2,7 @@ import { finalizeInterruptedMessages } from '@/lib/chat-messages'
 import { normalizePersonalityValue } from '@/lib/chat-runtime'
 import { modelOptionsQueryKey } from '@/lib/model-options'
 import { reconcileApprovalModeForProfile } from '@/store/approval-mode'
+import { recoverClarifyDrafts } from '@/app/session/clarify-draft-recovery'
 import { clearSettledClarifyRequest } from '@/store/clarify'
 import { reconcileSessionCompacting } from '@/store/compaction'
 import { requestDesktopOnboardingForCredentialWarning } from '@/store/onboarding'
@@ -322,8 +323,9 @@ export function handleSessionInfoEvent(ctx: GatewayEventContext): boolean {
         // Same wipe class as the turn-end clears (#83319): a reconnect can
         // replay a pre-clarify snapshot with running=false while the server
         // bridge is still parked on the open clarify request — keep the card
-        // while that request is live; clear it when it truly settled.
-        clearSettledClarifyRequest(sessionId)
+        // while that request is live; clear it when it truly settled. A
+        // mid-answer staging rides the clear into the session draft (#58783).
+        recoverClarifyDrafts(clearSettledClarifyRequest(sessionId), deps.activeSessionIdRef)
       }
 
       // Set when THIS event releases a confirmed live turn whose terminal

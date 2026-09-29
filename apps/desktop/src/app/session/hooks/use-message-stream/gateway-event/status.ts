@@ -6,6 +6,7 @@ import type { ErrorSurface } from '@/lib/error-surface'
 import { errorCardText } from '@/lib/error-surface-copy'
 import { isProviderSetupErrorMessage } from '@/lib/provider-setup-errors'
 import { type AgentNoticePayload, clearAgentNotice, nativeNoticeInput, showAgentNotice } from '@/store/agent-notices'
+import { recoverClarifyDrafts } from '@/app/session/clarify-draft-recovery'
 import { clearSettledClarifyRequest } from '@/store/clarify'
 import { reconcileSessionCompacting, setSessionCompacting, takeCompressDeferred } from '@/store/compaction'
 import { refreshBackgroundProcesses } from '@/store/composer-status'
@@ -308,7 +309,8 @@ export function handleStatusEvent(ctx: GatewayEventContext): boolean {
     // the failed turn (same intent as the message.complete clear).
     if (sessionId) {
       clearAllPrompts(sessionId)
-      clearSettledClarifyRequest(sessionId)
+      // Salvage a mid-answer clarify draft before the settled clear drops it (#58783).
+      recoverClarifyDrafts(clearSettledClarifyRequest(sessionId), deps.activeSessionIdRef)
       clearActiveSessionTodos(sessionId)
       reconcileSessionCompacting(sessionId, 'terminal')
       compactedTurnRef.current.delete(sessionId)
