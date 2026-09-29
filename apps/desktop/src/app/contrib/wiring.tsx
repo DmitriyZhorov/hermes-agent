@@ -377,7 +377,14 @@ export function ContribWiring({ children }: { children: ReactNode }) {
     setMessages
   })
 
-  const { connectionRef, gateway, gatewayRef, requestGateway: ambientRequestGateway } = useGatewayRequest()
+  const {
+    bindGatewayRequest,
+    bindGatewayRequestForOwner,
+    connectionRef,
+    gateway,
+    gatewayRef,
+    requestGateway: ambientRequestGateway
+  } = useGatewayRequest()
 
   // The guide remains selected while handoff creates on another profile.
   // Without this pin, the owner ladder sends session.create to the setup profile
@@ -573,9 +580,12 @@ export function ContribWiring({ children }: { children: ReactNode }) {
   } = useSessionActions({
     activeSessionId,
     activeSessionIdRef,
+    bindGatewayRequest,
+    bindGatewayRequestForOwner,
     busyRef,
     creatingSessionRef,
     ensureSessionState,
+    gatewayRef,
     getRouteToken,
     getRoutedStoredSessionId,
     holdSessionTranscriptView,
@@ -732,8 +742,8 @@ export function ContribWiring({ children }: { children: ReactNode }) {
   const composer = useComposerActions({ activeSessionId, currentCwd, requestGateway })
 
   const branchInNewChat = useCallback(
-    async (messageId?: string) => {
-      const branched = await branchCurrentSession(messageId)
+    async (messageId?: string, targetSessionId?: string) => {
+      const branched = await branchCurrentSession(messageId, targetSessionId)
 
       if (branched) {
         await refreshSessions().catch(() => undefined)
