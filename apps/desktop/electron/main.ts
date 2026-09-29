@@ -9574,7 +9574,8 @@ async function buildRemoteConnection(
   if (authMode === 'oauth') {
     const ticket = await resolveRemoteOauthTicket(baseUrl, remoteHeaders, {
       hasNativeSession,
-      mintGatewayWsTicket
+      mintGatewayWsTicket,
+      advertisedAuthProviders: url => gatewayAuthProviders(url, remoteHeaders)
     })
 
     const wsUrl = buildGatewayWsUrlWithTicket(baseUrl, ticket)

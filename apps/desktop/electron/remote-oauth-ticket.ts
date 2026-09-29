@@ -5,6 +5,8 @@ import { oauthTicketFailureAuthMessage } from './native-auth-decisions'
 interface RemoteOauthTicketDeps {
   hasNativeSession: (baseUrl: string) => boolean
   mintGatewayWsTicket: (baseUrl: string, headers: Record<string, string>) => Promise<string>
+  /** Best-effort gateway auth-provider lookup (cached), for failure copy. */
+  advertisedAuthProviders?: (baseUrl: string) => Promise<unknown>
 }
 
 // Roster dials use this same mint path before readiness; the ordinary 10s
@@ -27,11 +29,26 @@ export async function resolveRemoteOauthTicket(
   try {
     return await deps.mintGatewayWsTicket(baseUrl, headers)
   } catch (error) {
+    // Failure copy only: probe the gateway's advertised providers so an
+    // oauth-mode connection against a password-only backend names the real
+    // problem (the auth-mode mismatch) instead of looping the user back
+    // into a sign-in that can never persist. Best-effort — any probe
+    // failure keeps the existing expired/not-signed-in copy.
+    let advertisedProviders: unknown
+
+    if (deps.advertisedAuthProviders) {
+      try {
+        advertisedProviders = await deps.advertisedAuthProviders(baseUrl)
+      } catch {
+        advertisedProviders = undefined
+      }
+    }
+
     throw (
       makeNousCloudBackendDownError(baseUrl, error) ??
       gatewayTicketFailure(
         error,
-        oauthTicketFailureAuthMessage(hadNativeSession),
+        oauthTicketFailureAuthMessage(hadNativeSession, advertisedProviders),
         'Could not reach the remote Hermes gateway while refreshing its WebSocket ticket. Try reconnecting.'
       )
     )
