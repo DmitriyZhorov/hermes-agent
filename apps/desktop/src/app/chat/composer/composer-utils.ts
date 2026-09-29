@@ -195,6 +195,8 @@ export interface QueueEditState {
   attachments: ComposerAttachment[]
   draft: string
   entryId: string
+  /** The entry text as painted when the edit began — proves the buffer dirty. */
+  entryText: string
   sessionKey: string
 }
 

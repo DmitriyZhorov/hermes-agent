@@ -8,8 +8,10 @@ import {
   getQueuedPrompts,
   isQueueParked,
   MAX_AUTO_DRAIN_ATTEMPTS,
-  parkQueuedPrompts
+  parkQueuedPrompts,
+  removeQueuedPrompt
 } from '@/store/composer-queue'
+import { $salvagedEditNotice, undoSalvagedEdit } from '@/store/composer'
 import { setSessionsLoading } from '@/store/session'
 
 import type { QueueEditState } from '../composer-utils'
@@ -287,5 +289,186 @@ describe('useComposerQueue park integration', () => {
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
     expect(getQueuedPrompts(SESSION_KEY)).toHaveLength(0)
+  })
+
+  it('keeps a dirty in-progress queued edit when the turn settles in the background (#88621)', async () => {
+    // The reporter's scenario: the user opens a queued prompt for in-place
+    // editing and types for ~a minute; a background turn unwinds ("Operation
+    // interrupted" / timeout / settle) and the queue starts flowing again.
+    // The drain must not send the stale pre-edit text out from under the user,
+    // and the edit must not be cancelled back to the pre-edit draft — either
+    // way the typed minute is lost.
+    const entry = enqueueQueuedPrompt(SESSION_KEY, { attachments: [], text: 'original words' })!
+
+    const loadIntoComposer = vi.fn()
+    const onSubmit = vi.fn(async () => true)
+    const queueEditRef: { current: QueueEditState | null } = { current: null }
+    const draftRef = { current: '' }
+
+    const hook = renderHook(
+      ({ busy }: { busy: boolean }) =>
+        useComposerQueue({
+          activeQueueSessionKey: SESSION_KEY,
+          attachments: [],
+          busy,
+          clearDraft: () => undefined,
+          draftRef,
+          focusInput: () => undefined,
+          loadIntoComposer,
+          onCancel: vi.fn(),
+          onSteer: undefined,
+          onSubmit,
+          queueEditRef,
+          queueSessionKey: SESSION_KEY,
+          sessionId: 'rt-session-queue-hook'
+        }),
+      { initialProps: { busy: true } }
+    )
+
+    // Begin the in-place edit: the composer paints the entry text and records
+    // the pre-edit draft snapshot.
+    act(() => {
+      hook.result.current.beginQueuedEdit(entry)
+    })
+    expect(loadIntoComposer).toHaveBeenCalledWith('original words', [])
+
+    // The user types their replacement text for a minute. It lives in the
+    // editor/draftRef — NOT in the queue entry (the edit is unsaved).
+    draftRef.current = 'replacement text typed over a minute'
+
+    // The background turn unwinds and settles: busy flips false with a dirty
+    // edit buffer in the composer.
+    hook.rerender({ busy: false })
+
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    // The dirty edit buffer must survive the settle: the drain held off the
+    // entry under active edit (no submit of either text), the entry stays
+    // queued, and the edit is not torn down.
+    expect(onSubmit).not.toHaveBeenCalled()
+    expect(getQueuedPrompts(SESSION_KEY).map(item => item.text)).toEqual(['original words'])
+    expect(queueEditRef.current?.entryId).toBe(entry.id)
+  })
+
+  it('keeps the dirty edit buffer when the edited entry is drained out from under it (#88621)', async () => {
+    // The reporter's loss: mid-edit on a queued prompt, a background or
+    // cross-window drain removes the entry (the background drainer never
+    // skips the id another surface is editing). The queue-edit cleanup then
+    // tore the edit down and repainted the PRE-EDIT snapshot over the dirty
+    // buffer, permanently destroying the typed minute. The teardown must
+    // leave the composer untouched — no repaint, no focus call — and keep
+    // the typed text recoverable through the salvage notice.
+    const entry = enqueueQueuedPrompt(SESSION_KEY, { attachments: [], text: 'original words' })!
+
+    const loadIntoComposer = vi.fn()
+    const focusInput = vi.fn()
+    const onSubmit = vi.fn(async () => true)
+    const queueEditRef: { current: QueueEditState | null } = { current: null }
+    const draftRef = { current: '' }
+
+    const hook = renderHook(
+      ({ busy }: { busy: boolean }) =>
+        useComposerQueue({
+          activeQueueSessionKey: SESSION_KEY,
+          attachments: [],
+          busy,
+          clearDraft: () => undefined,
+          draftRef,
+          focusInput,
+          loadIntoComposer,
+          onCancel: vi.fn(),
+          onSteer: undefined,
+          onSubmit,
+          queueEditRef,
+          queueSessionKey: SESSION_KEY,
+          sessionId: 'rt-session-queue-hook'
+        }),
+      { initialProps: { busy: true } }
+    )
+
+    act(() => {
+      hook.result.current.beginQueuedEdit(entry)
+    })
+    loadIntoComposer.mockClear()
+    focusInput.mockClear()
+
+    // The user's minute of typing: unsaved, lives only in the edit buffer.
+    draftRef.current = 'replacement text typed over a minute'
+
+    // The background event: the entry is drained/removed elsewhere.
+    removeQueuedPrompt(SESSION_KEY, entry.id)
+
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    // The composer is untouched: the dirty buffer is still the draft, no
+    // pre-edit repaint, no focus steal.
+    expect(draftRef.current).toBe('replacement text typed over a minute')
+    expect(loadIntoComposer).not.toHaveBeenCalled()
+    expect(focusInput).not.toHaveBeenCalled()
+
+    // The edit exited (its entry is gone) but the typed text is recoverable:
+    // it stays in the editor AND the notice names it for an explicit put-back.
+    expect(queueEditRef.current).toBeNull()
+    const notice = $salvagedEditNotice.get()
+    expect(notice?.sessionKey).toBe(SESSION_KEY)
+    expect(notice?.currentText).toBe('replacement text typed over a minute')
+    expect(notice?.undoText).toBe('replacement text typed over a minute')
+  })
+
+  it('offers the cancel of a dirty queued edit for undo instead of discarding it (#88621)', () => {
+    // Esc / panel-delete on a dirty edit still restores the prior draft by
+    // design — but the typed replacement must be recoverable, not destroyed.
+    const entry = enqueueQueuedPrompt(SESSION_KEY, { attachments: [], text: 'original words' })!
+
+    const loadIntoComposer = vi.fn()
+    const queueEditRef: { current: QueueEditState | null } = { current: null }
+    const draftRef = { current: '' }
+
+    const hook = renderHook(
+      () =>
+        useComposerQueue({
+          activeQueueSessionKey: SESSION_KEY,
+          attachments: [],
+          busy: false,
+          clearDraft: () => undefined,
+          draftRef,
+          focusInput: () => undefined,
+          loadIntoComposer,
+          onCancel: vi.fn(),
+          onSteer: undefined,
+          onSubmit: vi.fn(async () => true),
+          queueEditRef,
+          queueSessionKey: SESSION_KEY,
+          sessionId: 'rt-session-queue-hook'
+        })
+    )
+
+    act(() => {
+      hook.result.current.beginQueuedEdit(entry)
+    })
+    draftRef.current = 'replacement text typed over a minute'
+
+    act(() => {
+      hook.result.current.exitQueuedEdit('cancel')
+    })
+
+    // Designed cancel semantics: the pre-edit draft is repainted…
+    expect(loadIntoComposer).toHaveBeenLastCalledWith('', [])
+    // …and the dirty buffer is kept recoverable behind the salvage notice.
+    const notice = $salvagedEditNotice.get()
+    expect(notice?.sessionKey).toBe(SESSION_KEY)
+    expect(notice?.currentText).toBe('')
+    expect(notice?.undoText).toBe('replacement text typed over a minute')
+
+    // Undo while the composer still shows the repainted draft puts the typed
+    // text back; after the user typed something new it only dismisses.
+    expect(undoSalvagedEdit('')).toBe('replacement text typed over a minute')
+    expect($salvagedEditNotice.get()).toBeNull()
   })
 })

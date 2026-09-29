@@ -541,7 +541,12 @@ export function useComposerDraft({
       const editing = queueEditStateRef.current
 
       if (editing?.sessionKey === activeQueueSessionKey) {
-        stashAt(activeQueueSessionKey, editing.draft, editing.attachments)
+        // #88621: a dirty edit buffer is the user's latest work — stash the
+        // LIVE text (what the editor actually holds), not the pre-edit
+        // snapshot. A clean buffer (still equals the entry it was editing)
+        // keeps the snapshot: the edit never happened as far as the draft is
+        // concerned, and the pre-edit words must come back on return.
+        stashAt(activeQueueSessionKey, latestText === editing.entryText ? editing.draft : latestText)
       } else if (!isBrowsingHistory(sessionId)) {
         stashAt(activeQueueSessionKey, latestText)
       }

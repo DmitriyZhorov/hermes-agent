@@ -3941,6 +3941,8 @@ export const en: Translations = {
     editingQueuedInComposer: 'Editing queued turn in composer',
     restoredDraftNotice: 'Restored your unsent message',
     restoredDraftUndo: 'Undo',
+    salvagedEditNotice: 'Kept your edited text',
+    salvagedEditUndo: 'Put it back',
     queueEdit: 'Edit',
     queueExpand: 'Expand',
     queueCollapse: 'Collapse',

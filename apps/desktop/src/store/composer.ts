@@ -638,6 +638,65 @@ export function dismissRestoredDraftNotice(): void {
 }
 
 /**
+ * Salvage for a dirty queued-edit buffer (#88621). A background event can tear
+ * an in-place queued-prompt edit down (the entry was drained or deleted out
+ * from under it) exactly when the composer holds unsaved typed work. The
+ * teardown itself no longer repaints over the buffer, and a cancel keeps its
+ * designed pre-edit repaint — either way the typed text must stay recoverable,
+ * never destroyed. The notice is session-scoped: it renders only on the
+ * composer whose session it names, offers (never hijacks) Undo, and fires
+ * once — it is consumed by the undo or by dismissal.
+ */
+export interface SalvagedEditNotice {
+  /** The queue session key whose composer the edit buffer belonged to. */
+  sessionKey: string
+  /** The text the composer shows now (pre-edit draft or empty). */
+  currentText: string
+  /** The salvaged typed text Undo would put back into the composer. */
+  undoText: string
+}
+
+export const $salvagedEditNotice = atom<SalvagedEditNotice | null>(null)
+
+/**
+ * Publish the salvage notice. `currentText` is what the composer is showing
+ * after the teardown (its pre-edit draft — the cancel repaint — or the dirty
+ * buffer itself when the teardown left it in place); `undoText` is the typed
+ * work that would otherwise be lost.
+ */
+export function announceSalvagedEdit(sessionKey: string | null | undefined, currentText: string, undoText: string): void {
+  const key = sessionKey?.trim()
+
+  if (!key || !undoText.trim()) {
+    return
+  }
+
+  $salvagedEditNotice.set({ currentText, sessionKey: key, undoText })
+}
+
+export function dismissSalvagedEdit(): void {
+  $salvagedEditNotice.set(null)
+}
+
+/**
+ * Undo the teardown/restore: put the salvaged typed text back into the
+ * composer. Only while the live text still equals `currentText` — once the
+ * user has typed something new, Undo would destroy their work, so it only
+ * dismisses. Returns the text to paint into the composer, or null when the
+ * notice does not apply (nothing to undo or the draft has moved on).
+ */
+export function undoSalvagedEdit(liveText: string): string | null {
+  const notice = $salvagedEditNotice.get()
+  $salvagedEditNotice.set(null)
+
+  if (!notice || liveText !== notice.currentText) {
+    return null
+  }
+
+  return notice.undoText
+}
+
+/**
  * Undo the restore: put the text back under the dead key (where it was,
  * still recoverable by the same path) and empty the fresh draft. Only while
  * the live text is still exactly what was restored — once the user has
