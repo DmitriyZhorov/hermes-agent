@@ -7,6 +7,7 @@ import { $activeGatewayProfile } from '@/store/profile'
 import {
   $agentReactions,
   $localReactions,
+  agentLiveReactions,
   clearLiveReactionOverlays,
   mergeReactions,
   recordAgentReaction,
@@ -88,11 +89,14 @@ vi.mock('@/store/transcript-tail', () => ({ clearTranscriptTailPaging: vi.fn() }
 vi.mock('@/store/transcript-tail-cache', () => ({ clearTranscriptTails: vi.fn() }))
 
 const AGENT_THUMBS_UP: MessageReaction[] = [{ at: 1, author: 'agent', emoji: '👍' }]
+const SOURCE_A = 'conn:source-a::default'
+const SOURCE_B = 'conn:source-b::default'
 
-const reactionEvent = (isActiveEvent: boolean): GatewayEventContext =>
+const reactionEvent = (overrides: Partial<GatewayEventContext> = {}): GatewayEventContext =>
   ({
-    event: { type: 'message.reaction' },
-    isActiveEvent,
+    event: { connectionId: 'source-a', profile: 'default', type: 'message.reaction' },
+    isActiveEvent: true,
+    fromActiveSource: () => true,
     payload: { row_id: 4242, reactions: AGENT_THUMBS_UP, role: 'assistant' }
   }) as unknown as GatewayEventContext
 
@@ -101,20 +105,46 @@ describe('live reaction overlay scope', () => {
     clearLiveReactionOverlays()
   })
 
-  it('a real message.reaction event records into the overlay, and merge prefers it over persisted', () => {
+  it('a real message.reaction event records into the overlay scoped to its source, and merge prefers it over persisted', () => {
     // An optimistic bubble awaiting its durable row id is the stamping target.
     $messages.set([{ id: 'm1', role: 'assistant' }] as never)
 
-    expect(handleDesktopBridgeEvent(reactionEvent(true))).toBe(true)
-    expect($agentReactions.get()[4242]).toEqual(AGENT_THUMBS_UP)
+    expect(handleDesktopBridgeEvent(reactionEvent())).toBe(true)
+
+    const overlay = $agentReactions.get()[4242]
+
+    expect(overlay?.scope).toBe(SOURCE_A)
+    expect(overlay?.reactions).toEqual(AGENT_THUMBS_UP)
     expect($messages.get()).toEqual([{ id: 'm1', reactions: AGENT_THUMBS_UP, role: 'assistant', rowId: 4242 }])
     expect(
-      mergeReactions([{ at: 0, author: 'agent', emoji: '😴' }], undefined, $agentReactions.get()[4242])
+      mergeReactions(
+        [{ at: 0, author: 'agent', emoji: '😴' }],
+        undefined,
+        agentLiveReactions($agentReactions.get(), 4242, SOURCE_A)
+      )
     ).toEqual(AGENT_THUMBS_UP)
   })
 
+  it('a foreign source never sees the overlay: its persisted reaction at the same row id wins', () => {
+    // Focusing a session tile from connection B does not change the ambient
+    // profile, so an overlay recorded while source A was on screen used to
+    // override B's persisted reaction at the coincidental same row id. The
+    // read keys the displayed session's own source (connection + profile),
+    // so B falls back to what its transcript carried.
+    recordAgentReaction(4242, AGENT_THUMBS_UP, SOURCE_A)
+
+    const persistedForB: MessageReaction[] = [{ at: 0, author: 'agent', emoji: '😴' }]
+
+    expect(agentLiveReactions($agentReactions.get(), 4242, SOURCE_B)).toBeUndefined()
+    expect(
+      mergeReactions(persistedForB, undefined, agentLiveReactions($agentReactions.get(), 4242, SOURCE_B))
+    ).toEqual(persistedForB)
+    // The owning source still sees its live overlay.
+    expect(agentLiveReactions($agentReactions.get(), 4242, SOURCE_A)).toEqual(AGENT_THUMBS_UP)
+  })
+
   it('a profile swap clears the overlay so a foreign row id cannot repaint', () => {
-    recordAgentReaction(4242, AGENT_THUMBS_UP)
+    recordAgentReaction(4242, AGENT_THUMBS_UP, 'default')
     setLocalReaction('msg-1', '❤️')
     expect($agentReactions.get()[4242]).toBeDefined()
 
@@ -124,20 +154,24 @@ describe('live reaction overlay scope', () => {
     expect($localReactions.get()).toEqual({})
     // The durable reaction survives the wipe: merge falls back to persisted.
     expect(
-      mergeReactions([{ at: 0, author: 'agent', emoji: '😴' }], undefined, $agentReactions.get()[4242])
+      mergeReactions(
+        [{ at: 0, author: 'agent', emoji: '😴' }],
+        undefined,
+        agentLiveReactions($agentReactions.get(), 4242, 'work')
+      )
     ).toEqual([{ at: 0, author: 'agent', emoji: '😴' }])
   })
 
   it('a same-profile set is not a swap and keeps live overlays', () => {
-    recordAgentReaction(4242, AGENT_THUMBS_UP)
+    recordAgentReaction(4242, AGENT_THUMBS_UP, 'default')
 
     $activeGatewayProfile.set($activeGatewayProfile.get())
 
-    expect($agentReactions.get()[4242]).toEqual(AGENT_THUMBS_UP)
+    expect(agentLiveReactions($agentReactions.get(), 4242, 'default')).toEqual(AGENT_THUMBS_UP)
   })
 
   it('a connection switch wipes the overlays along with the rest of the outgoing transcript', () => {
-    recordAgentReaction(4242, AGENT_THUMBS_UP)
+    recordAgentReaction(4242, AGENT_THUMBS_UP, SOURCE_A)
     setLocalReaction('msg-1', '❤️')
 
     wipeSessionListsForGatewaySwitch()

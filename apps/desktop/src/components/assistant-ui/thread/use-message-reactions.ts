@@ -1,12 +1,23 @@
+import { registryBackendScopeKey } from '@hermes/shared'
 import { useAuiState, useMessageRuntime } from '@assistant-ui/react'
 import { useStore } from '@nanostores/react'
 import { type MouseEvent, useCallback } from 'react'
 
+import { useSessionView } from '@/app/chat/session-view'
 import type { ChatMessage } from '@/lib/chat-messages'
 import { triggerHaptic } from '@/lib/haptics'
+import { activeGatewayConnectionId } from '@/store/gateway'
+import { $activeGatewayProfile } from '@/store/profile'
 import { QUICK_REACTIONS, toggleMessageReaction } from '@/store/reactions'
 import { $reactionsEnabled } from '@/store/reactions-enabled'
-import { $agentReactions, $localReactions, mergeReactions, setLocalReaction } from '@/store/reactions-local'
+import {
+  $agentReactions,
+  $localReactions,
+  agentLiveReactions,
+  mergeReactions,
+  setLocalReaction
+} from '@/store/reactions-local'
+import { sessionEventScopeFor } from '@/store/session-states'
 import type { MessageReaction } from '@/types/hermes'
 
 // Stable empty identity — a fresh [] per render would re-run every consumer.
@@ -80,7 +91,20 @@ export function useMessageReactions(
 
   const enabled = useStore($reactionsEnabled)
   const localAll = useStore($localReactions)
-  const agentLive = useStore($agentReactions)
+  const agentAll = useStore($agentReactions)
+
+  // The agent overlay is keyed by bare DB row id, and row ids are only
+  // meaningful within ONE source's database. Resolve the source this
+  // displayed session actually belongs to — the scope its own events
+  // proved, falling back to the actively served source when the runtime's
+  // events arrived untagged (local legacy primary) — so an overlay recorded
+  // on source A can never repaint a coincidental same-numbered row on
+  // source B (a tile from another connection, a cross-source resume).
+  const runtimeId = useStore(useSessionView().$runtimeId)
+  const activeProfile = useStore($activeGatewayProfile)
+  const viewScope =
+    sessionEventScopeFor(runtimeId) ?? registryBackendScopeKey(activeGatewayConnectionId(), activeProfile)
+  const agentLive = rowId === undefined ? undefined : agentLiveReactions(agentAll, rowId, viewScope)
 
   return {
     enabled,
@@ -88,7 +112,7 @@ export function useMessageReactions(
       (emoji: null | string) => commitReaction(messageId, role, rowId, reactions, emoji),
       [messageId, reactions, role, rowId]
     ),
-    reactions: mergeReactions(reactions, localAll[messageId], rowId === undefined ? undefined : agentLive[rowId])
+    reactions: mergeReactions(reactions, localAll[messageId], agentLive)
   }
 }
 
