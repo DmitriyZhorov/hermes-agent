@@ -182,7 +182,7 @@ Tools for driving desktop [Projects](../user-guide/cli.md) — named, multi-fold
 
 ## `setup` toolset
 
-Granted only to sessions of the desktop setup profile (`role: setup` in its `profile.yaml`); never configurable.
+Enabled by the desktop setup profile's own config (`platform_toolsets.cli`); only desktop sessions keep it. Not listed by `hermes tools`.
 
 | Tool | Description | Requires environment |
 |------|-------------|----------------------|

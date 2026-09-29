@@ -26,7 +26,7 @@ import { dismissNotification, notify } from '@/store/notifications'
 import { $onboardingAnswers } from '@/store/onboarding-answers'
 import { beginOnboardingHandoff, completeOnboardingFlow } from '@/store/onboarding-gate'
 import { watchPluginOutcomes } from '@/store/onboarding-plugin-outcomes'
-import { $activeGatewayProfile, $newChatProfile, $newChatRoute, $profiles, ensureGatewayAgent } from '@/store/profile'
+import { $activeGatewayProfile, $newChatProfile, $newChatRoute, ensureGatewayAgent } from '@/store/profile'
 import {
   $activeSessionId,
   $selectedStoredSessionId,
@@ -65,12 +65,7 @@ export function useOnboardingHandoff({
   useEffect(() => watchPluginOutcomes(() => $setupSession.get()?.runtimeId), [])
 
   useEffect(() => {
-    if (
-      !isOnboardingEnabled() ||
-      $setupHandoff.get() ||
-      !selectedStoredId ||
-      $profiles.get().find(p => p.name === $activeGatewayProfile.get())?.role !== 'setup'
-    ) {
+    if (!isOnboardingEnabled() || $setupHandoff.get() || !selectedStoredId) {
       return
     }
 

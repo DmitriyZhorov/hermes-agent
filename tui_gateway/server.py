@@ -1923,19 +1923,17 @@ def _gui_surface_toolsets(platform: str) -> set[str]:
 
 def _with_session_toolsets(selection, platform: str | None) -> list[str]:
     """*selection* plus what the session carries whatever its config says (the client surface's
-    toolsets when *platform* is given; the ones its PROFILE's role reserves, from the backend-written
-    profile.yaml under the session's home override), minus toolsets reserved for another role.
+    toolsets when *platform* is given).
 
     The fold-in happens after ``_get_platform_tools`` already subtracted ``agent.disabled_toolsets``,
     so the same subtraction is applied to the fold-in itself — otherwise ``disabled_toolsets:
     [project]`` is a no-op on desktop/TUI, the only surfaces where the client toolsets exist
     (#54433). ``desktop_ui`` is kept regardless: it is the client's own control surface, not a
     model toolset."""
-    from toolsets import profile_role_toolsets
-    granted, denied = profile_role_toolsets()
+    from toolsets import TOOLSET_SESSION_PLATFORMS
     surface = _gui_surface_toolsets(platform) if platform is not None else set()
-    kept = [name for name in selection if name not in denied]
-    fold_in = (surface | granted) - set(kept)
+    kept = [name for name in selection if platform in TOOLSET_SESSION_PLATFORMS.get(name, {platform})]
+    fold_in = surface - set(kept)
     disabled = set(_load_disabled_toolsets() or [])
     if disabled:
         fold_in -= disabled - {"desktop_ui"}
@@ -2008,8 +2006,7 @@ def _load_enabled_toolsets(platform: str | None = None) -> list[str] | None:
     if explicit and validate_toolset is not None:
         resolved = _resolve_explicit_toolsets(explicit, validate_toolset)
         if resolved is not False:
-            # An operator pin replaces the surface fold-in but never strips the profile's own role toolsets.
-            return resolved if resolved is None else _with_session_toolsets(resolved, None)
+            return resolved
         fallback_notice = "[tui] no valid HERMES_TUI_TOOLSETS entries; using configured CLI toolsets"
     try:
         from hermes_cli.config import load_config
