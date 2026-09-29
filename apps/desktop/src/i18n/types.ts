@@ -4599,6 +4599,8 @@ export interface Translations {
     editFailed: string
     editTurnUnavailable: string
     resumeFailed: string
+    resumeNotOwnedTitle: string
+    resumeNotOwnedBody: string
     readOnlyTranscriptTitle: string
     readOnlyTranscriptBody: string
     readOnlyTranscriptSendBlocked: string
