@@ -114,8 +114,10 @@ test('retireIdle honours the pinned-tier eligibility override while every other 
     })
 
     try {
-      await retirer.retireIdle('pinned', 10 * 60_000, candidate =>
-        Boolean(candidate.lastStreamedAt && Date.now() - (candidate.lastStreamedAt || 0) > 60 * 60_000)
+      await retirer.retireIdle(
+        'pinned',
+        10 * 60_000,
+        candidate => Boolean(candidate.lastStreamedAt && Date.now() - (candidate.lastStreamedAt || 0) > 60 * 60_000)
       )
     } finally {
       retirer.dispose()
