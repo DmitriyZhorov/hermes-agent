@@ -3,8 +3,12 @@ import { act, cleanup } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { type ChatMessage, chatMessageText } from '@/lib/chat-messages'
+import { playCompletionSound } from '@/lib/completion-sound'
+import { $turnStartedAt } from '@/store/session'
 
 import { type MessageStreamHarness, renderMessageStream } from './test-harness'
+
+vi.mock('@/lib/completion-sound', () => ({ playCompletionSound: vi.fn() }))
 
 /**
  * #101321: a provider stream drop (Grok) can leave the previous turn's
@@ -142,6 +146,48 @@ describe('#101321 streamId reuse across turns', () => {
     await complete({ text: 'BBB so far — done' })
     expect(assistantTexts()).toEqual(['AAA partial — the dropped turn completed', 'BBB so far — done'])
     expect(stream.state(SID)).toMatchObject({ busy: false, streamId: null })
+  })
+
+  it("a no-delta B completion repeating a pending A reply is B's own occurrence", async () => {
+    stream = renderMessageStream(SID)
+    seedDroppedTurn({ aText: 'The answer is unchanged.', bText: 'prompt B' })
+
+    // B starts and completes without deltas, with the same valid reply.
+    await start()
+    await complete({ text: 'The answer is unchanged.' })
+
+    // B appended its own bubble below its prompt instead of re-completing
+    // A's row, and B's turn settled.
+    const messages = stream.state(SID).messages
+    expect(messages.filter(m => m.role === 'assistant')).toHaveLength(2)
+    expect(messages.at(-1)?.role).toBe('assistant')
+    expect(chatMessageText(messages.at(-1)!)).toBe('The answer is unchanged.')
+    expect(stream.state(SID)).toMatchObject({ busy: false, turnLive: false })
+  })
+
+  it("a late A terminal frame does not run B's turn-end effects", async () => {
+    stream = renderMessageStream(SID)
+    seedDroppedTurn({ aText: 'AAA partial', bText: 'prompt B' })
+
+    await start()
+    await delta('BBB so far')
+    await flush()
+
+    const bStartedAt = $turnStartedAt.get()
+    expect(bStartedAt).not.toBeNull()
+    vi.mocked(playCompletionSound).mockClear()
+
+    await complete({ text: 'AAA partial — the dropped turn completed' })
+
+    // B is still live: its clock, completion sound and busy state are B's.
+    expect($turnStartedAt.get()).toBe(bStartedAt)
+    expect(playCompletionSound).not.toHaveBeenCalled()
+    expect(stream.state(SID)).toMatchObject({ busy: true, turnLive: true })
+
+    // B's own terminal frame still runs them.
+    await complete({ text: 'BBB so far — done' })
+    expect($turnStartedAt.get()).toBeNull()
+    expect(playCompletionSound).toHaveBeenCalledTimes(1)
   })
 
   it('ten sequential turns keep one bubble per turn (no cross-turn growth)', async () => {

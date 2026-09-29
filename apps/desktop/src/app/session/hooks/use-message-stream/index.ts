@@ -40,6 +40,7 @@ import { collapseDuplicateFinalAfterToolInterim, type DuplicateFinalCollapse } f
 import { useGatewayEventHandler } from './gateway-event'
 import { handleServerRequest as dispatchServerRequest } from './gateway-event/server-requests'
 import { extendInterruptedReply } from './interrupted-reply'
+import { hasHighTextOverlap, previousTurnFrameIndex } from './previous-turn-frame'
 import { currentResponseParts, mergeCurrentResponseText } from './response-parts'
 import { completionErrorText, delegateTaskPayloads, MAX_STREAM_FLUSH_GAP_MS, STREAM_DELTA_FLUSH_MS } from './utils'
 
@@ -74,61 +75,6 @@ interface QueuedStreamDelta {
 let streamMessageSeq = 0
 
 const nextStreamMessageId = (prefix: string) => `${prefix}-${Date.now()}-${++streamMessageSeq}`
-
-/**
- * A sealed stream can lose a few characters while the authoritative final
- * remains the same reply. Limit the tolerated edit distance so a separate
- * assistant segment cannot replace a merely similar interim.
- */
-function hasHighTextOverlap(left: string, right: string): boolean {
-  const maxLength = Math.max(left.length, right.length)
-
-  if (maxLength < 160) {
-    return false
-  }
-
-  const maxEdits = Math.max(1, Math.min(32, Math.floor(maxLength * 0.02)))
-
-  if (Math.abs(left.length - right.length) > maxEdits) {
-    return false
-  }
-
-  const [shorter, longer] = left.length < right.length ? [left, right] : [right, left]
-
-  let previous = Array.from({ length: shorter.length + 1 }, (_, index) =>
-    index <= maxEdits ? index : Number.POSITIVE_INFINITY
-  )
-
-  let current = new Array<number>(shorter.length + 1).fill(Number.POSITIVE_INFINITY)
-
-  for (let longerIndex = 1; longerIndex <= longer.length; longerIndex += 1) {
-    const start = Math.max(1, longerIndex - maxEdits)
-    const end = Math.min(shorter.length, longerIndex + maxEdits)
-    current.fill(Number.POSITIVE_INFINITY, start, end + 1)
-    current[start - 1] = start === 1 ? longerIndex : Number.POSITIVE_INFINITY
-
-    let rowMinimum = Number.POSITIVE_INFINITY
-
-    for (let shorterIndex = start; shorterIndex <= end; shorterIndex += 1) {
-      current[shorterIndex] = Math.min(
-        previous[shorterIndex] + 1,
-        current[shorterIndex - 1] + 1,
-        previous[shorterIndex - 1] + Number(longer[longerIndex - 1] !== shorter[shorterIndex - 1])
-      )
-      rowMinimum = Math.min(rowMinimum, current[shorterIndex])
-    }
-
-    if (rowMinimum > maxEdits) {
-      return false
-    }
-
-    const nextPrevious = current
-    current = previous
-    previous = nextPrevious
-  }
-
-  return previous[shorter.length] <= maxEdits
-}
 
 export function useMessageStream({
   activeGatewayProfile = 'default',
@@ -198,6 +144,7 @@ export function useMessageStream({
 
           const streamId =
             reconciledId ?? (staleStreamId ? null : state.streamId) ?? nextStreamMessageId('assistant-stream')
+
           // The event landed on a bubble that is NOT the live stream (sealed
           // by interim commentary, a mid-turn user message, or turn settle).
           // It is a patch to history: the bubble keeps its own pending bit
@@ -880,92 +827,16 @@ export function useMessageStream({
 
         let collapsed: DuplicateFinalCollapse | null = null
 
-        // Late terminal frame from a PREVIOUS turn (#101321): a provider
-        // stream drop (Grok) can redeliver turn A's complete/error after
-        // turn B already started. Such a frame's text continues a row above
-        // the newest user row — the dropped turn's still-pending orphan, or
-        // a sealed leftover (submit settles any pending bubble) — and
-        // shares nothing with whatever the live turn has streamed. Letting
-        // it take the live-bubble path would REPLACE B's answer with A's.
-        // Instead, complete the row it provably belongs to and leave the
-        // live turn's bookkeeping untouched: B's own terminal frame still
-        // owns the turn state. Same-turn facts (interimBoundaryPending,
-        // previewed/transformed finals) stay on their normal paths.
-        const previousTurnFrame = (() => {
-          if (!state.turnLive || interimBoundaryPending || responsePreviewed || responseTransformed || !finalText) {
-            return null
-          }
+        const previousTurnIndex = previousTurnFrameIndex(state, sessionId, text, {
+          responsePreviewed,
+          responseTransformed
+        })
 
-          // The newest real user row — a projected queued prompt is not a
-          // turn boundary (the live row legitimately sits above it).
-          const newestUserIndex = prev.findLastIndex(
-            message => message.role === 'user' && message.id !== `user-queued-${sessionId}`
-          )
-
-          if (newestUserIndex < 0) {
-            return null
-          }
-
-          const liveRow = streamIndex >= 0 ? prev[streamIndex] : null
-          const liveText = liveRow ? chatMessageText(liveRow).trim() : ''
-
-          // The frame continues the live bubble's streamed text: it is this
-          // turn's own terminal (a sealed partial, a dropped character or
-          // two) and must take the normal settle path.
-          if (
-            liveText &&
-            (finalText === liveText ||
-              finalText.startsWith(liveText) ||
-              liveText.startsWith(finalText) ||
-              hasHighTextOverlap(finalText, liveText))
-          ) {
-            return null
-          }
-
-          for (let index = newestUserIndex - 1; index >= 0; index -= 1) {
-            const row = prev[index]
-
-            // Interim rows are same-turn seals (tool commentary, steers);
-            // their completions are governed by the boundary-flag paths.
-            if (row.role !== 'assistant' || row.hidden || row.interim) {
-              continue
-            }
-
-            const rowText = chatMessageText(row).trim()
-
-            if (
-              !rowText ||
-              !(
-                finalText === rowText ||
-                finalText.startsWith(rowText) ||
-                rowText.startsWith(finalText) ||
-                hasHighTextOverlap(finalText, rowText)
-              )
-            ) {
-              continue
-            }
-
-            // Without a live bubble the frame may be the CURRENT turn's own
-            // no-delta completion: a new occurrence appends its own bubble
-            // even when its text repeats an earlier reply (pinned by the
-            // completion-boundaries suite). Only a still-pending orphan — a
-            // turn whose terminal never arrived — is provably the frame's
-            // own bubble in that position.
-            if (!liveRow && !row.pending) {
-              continue
-            }
-
-            return { index }
-          }
-
-          return null
-        })()
-
-        if (previousTurnFrame) {
+        if (previousTurnIndex !== null) {
           return {
             ...state,
             messages: prev.map((message, messageIndex) => {
-              if (messageIndex !== previousTurnFrame.index) {
+              if (messageIndex !== previousTurnIndex) {
                 return message
               }
 

@@ -19,6 +19,8 @@ import { refreshSupportedSessionControlAfterTurn } from '@/store/session-control
 import { pruneFinishedSessionSubagents } from '@/store/subagents'
 import { clearActiveSessionTodos } from '@/store/todos'
 
+import { previousTurnFrameIndex } from '../previous-turn-frame'
+
 import type { GatewayEventContext } from './types'
 
 function firstBillingLine(text: string): string {
@@ -356,22 +358,7 @@ export function handleMessageStreamEvent(ctx: GatewayEventContext): boolean {
       return true
     }
 
-    // Turn ended — drop any blocking prompt still open for THIS session
-    // (e.g. interrupted, or the approval already resolved). Scoped to the
-    // session so a background turn finishing can't wipe the active chat's
-    // prompt, and vice versa.
-    clearAllPrompts(sessionId)
-    clearSettledClarifyRequest(sessionId)
-    // Turn ended without a final `todo` update — drop a still-unfinished
-    // list so "Tasks N/M" doesn't stay pinned above the composer with the
-    // last item stuck pending/in_progress. Finished lists keep their linger.
-    clearActiveSessionTodos(sessionId)
-    setSessionCompacting(sessionId, false)
-
     flushQueuedDeltas(sessionId)
-
-    // Keyed by session so only one window beeps when several are open.
-    playCompletionSound(sessionId)
 
     const finalText = coerceGatewayText(payload?.text) || coerceGatewayText(payload?.rendered)
 
@@ -388,16 +375,50 @@ export function handleMessageStreamEvent(ctx: GatewayEventContext): boolean {
           }
         : undefined
 
-    completeAssistantMessage(
-      sessionId,
-      finalText,
-      payload?.response_previewed,
-      failure,
-      occurredAt,
-      payload?.persisted_turn,
-      Boolean(payload?.response_transformed),
-      typeof payload?.status === 'string' ? payload.status : undefined
-    )
+    const complete = () =>
+      completeAssistantMessage(
+        sessionId,
+        finalText,
+        payload?.response_previewed,
+        failure,
+        occurredAt,
+        payload?.persisted_turn,
+        Boolean(payload?.response_transformed),
+        typeof payload?.status === 'string' ? payload.status : undefined
+      )
+
+    // A late terminal frame from the PREVIOUS turn (#101321, Grok stream
+    // drop) settles only its own row. It must not run the live turn's
+    // turn-end effects: prompts, todos, compacting, completion sound, turn
+    // clock, pet, usage and control refresh all still belong to that turn.
+    const lateFrame =
+      previousTurnFrameIndex(sessionStateByRuntimeIdRef.current.get(sessionId), sessionId, finalText, {
+        responsePreviewed: payload?.response_previewed,
+        responseTransformed: Boolean(payload?.response_transformed)
+      }) !== null
+
+    if (lateFrame) {
+      complete()
+
+      return true
+    }
+
+    // Turn ended — drop any blocking prompt still open for THIS session
+    // (e.g. interrupted, or the approval already resolved). Scoped to the
+    // session so a background turn finishing can't wipe the active chat's
+    // prompt, and vice versa.
+    clearAllPrompts(sessionId)
+    clearSettledClarifyRequest(sessionId)
+    // Turn ended without a final `todo` update — drop a still-unfinished
+    // list so "Tasks N/M" doesn't stay pinned above the composer with the
+    // last item stuck pending/in_progress. Finished lists keep their linger.
+    clearActiveSessionTodos(sessionId)
+    setSessionCompacting(sessionId, false)
+
+    // Keyed by session so only one window beeps when several are open.
+    playCompletionSound(sessionId)
+
+    complete()
 
     // Onboarding's first build: between turns is the only moment Setup may
     // put a check-in into that session (no-op everywhere else).
