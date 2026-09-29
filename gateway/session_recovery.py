@@ -7,9 +7,11 @@ from __future__ import annotations
 import logging
 import json
 import math
+import os
 import threading
 from dataclasses import replace
 from datetime import datetime
+from pathlib import Path
 from gateway.config import Platform
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
@@ -413,15 +415,78 @@ class SessionRecoveryMixin:
                     create_kwargs.get("session_id"), session_key, during, e),
             )
 
+
+    # Placeholder ``terminal.cwd`` values (resolved per profile at runtime) — mirrors
+    # tui_gateway/server.py's _CWD_PLACEHOLDERS and gateway/run.py's CWD_PLACEHOLDERS.
+    _CWD_PLACEHOLDERS = frozenset({".", "auto", "cwd"})
+
+    @classmethod
+    def _configured_cwd_from_cfg(cls, cfg) -> Optional[str]:
+        """Absolute, existing ``terminal.cwd`` from a config mapping; None for
+        placeholders/missing/invalid.
+
+        Same semantics as tui_gateway/server.py:_configured_cwd_from_cfg: the
+        sidebar groups sessions by this column, so a placeholder must NOT be
+        persisted (each surface resolves it at runtime) and a nonexistent path
+        must not be recorded either.
+        """
+        terminal_cfg = cfg.get("terminal") if isinstance(cfg, dict) else None
+        raw = str(terminal_cfg.get("cwd") or "").strip() if isinstance(terminal_cfg, dict) else ""
+        if not raw or raw in cls._CWD_PLACEHOLDERS:
+            return None
+        resolved = os.path.abspath(os.path.expanduser(raw))
+        return resolved if os.path.isdir(resolved) else None
+
+    @classmethod
+    def _profile_home_configured_cwd(cls, profile_home) -> Optional[str]:
+        """A profile's ``terminal.cwd`` from ITS config.yaml (fail-open: None)."""
+        if profile_home is None:
+            return None
+        try:
+            from hermes_cli.config_effective import load_user_config_effective
+            p = Path(profile_home) / "config.yaml"
+            return cls._configured_cwd_from_cfg(load_user_config_effective(p)) if p.exists() else None
+        except Exception:
+            return None
+
+    def _default_session_cwd_for_key(self, session_key: str) -> Optional[str]:
+        """Seed cwd for a gateway-created session row (#93625).
+
+        Precedence mirrors tui_gateway/server.py:_default_session_cwd: the
+        OWNING profile's configured ``terminal.cwd`` (a multiplexed gateway
+        serves several profiles, and the process-global TERMINAL_CWD belongs to
+        the launch profile only), then TERMINAL_CWD, then the launch profile's
+        configured cwd, then the process cwd. None only when every source is
+        absent/placeholder — the column stays NULL rather than recording a guess.
+        """
+        home = self._profile_home_for_key(session_key)
+        if home is not None:
+            configured = self._profile_home_configured_cwd(home)
+            if configured:
+                return configured
+        env_cwd = (os.getenv("TERMINAL_CWD") or "").strip()
+        if env_cwd and env_cwd not in self._CWD_PLACEHOLDERS:
+            return env_cwd
+        routing_home = getattr(self, "_routing_home", None)
+        if routing_home is not None:
+            configured = self._profile_home_configured_cwd(routing_home)
+            if configured:
+                return configured
+        return os.getcwd() or None
+
     @staticmethod
+    @classmethod
     def _session_create_kwargs(
-        *, session_id, session_key, origin, source_value, display_name, parent_session_id,
+        cls, store, *, session_id, session_key, origin, source_value, display_name, parent_session_id,
     ) -> Dict[str, Any]:
         """kwargs for ``SessionDB.create_session``. Identity (origin_json) and lineage
         (parent/_reset_from) land atomically in the INSERT so a crash right after cannot strand the
-        row unroutable."""
+        row unroutable. ``cwd`` is seeded now too: the desktop sidebar groups rows by this column,
+        and a gateway row with NULL/empty cwd falls out of every project lane (#93625). The upsert
+        only fills NULLs, so the value recorded here is authoritative for the row's life."""
         from gateway.session_identity import transport_profile_of
         return {
+            "cwd": store._default_session_cwd_for_key(session_key),
             "session_id": session_id,
             "source": source_value,
             "user_id": origin.user_id if origin else None,
@@ -441,6 +506,39 @@ class SessionRecoveryMixin:
         """INSERT a session row and record its routing peer; ``log(exc)`` on failure. A failed
         create is a routing hazard (visible warning), but the row is self-healed with full identity
         by the next per-turn peer refresh."""
+        try:
+            self._backfill_legacy_gateway_session_cwd(session_key)
+        except Exception as e:
+            log(e)
+
+    def _backfill_legacy_gateway_session_cwd(self, session_key: str) -> None:
+        """One-time repair per store: legacy messaging rows with NULL/empty cwd (#93625).
+
+        The gateway now seeds ``cwd`` at creation (``_session_create_kwargs``), but rows minted
+        before that carry nothing and fall out of the desktop's project grouping. The default
+        cwd resolved for THIS key is the same value a fresh row in the same store would record,
+        so stamping it onto the store's legacy messaging rows is a repair, not a guess. Idempotent
+        via a ``state_meta`` gate: the UPDATE runs once per store, best-effort (a locked DB
+        retries on the next routing transition).
+        """
+        db = self._db_for_key(session_key)
+        if db is None:
+            return
+        backfill = getattr(db, "backfill_gateway_session_cwd", None)
+        if not callable(backfill):
+            return
+        gate = "gateway_session_cwd_backfilled"
+        if db.get_meta(gate) == "1":
+            return
+        cwd = self._default_session_cwd_for_key(session_key)
+        sources = [p.value for p in Platform if p not in (Platform.LOCAL,)]
+        repaired = backfill(cwd, sources) if cwd else 0
+        db.set_meta(gate, "1")
+        if repaired:
+            logger.info(
+                "Backfilled cwd for %d legacy gateway session(s) in %s", repaired,
+                getattr(db, "db_path", "?"),
+            )
         try:
             self._db_for_key(session_key).create_session(**db_create_kwargs)
             self._record_gateway_session_peer(

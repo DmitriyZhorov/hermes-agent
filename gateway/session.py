@@ -1055,7 +1055,7 @@ class SessionStore(
         if current is not candidate:
             return None
         return self._session_create_kwargs(
-            session_id=session_id, session_key=session_key, origin=source,
+            self, session_id=session_id, session_key=session_key, origin=source,
             source_value=source.platform.value, display_name=source.chat_name,
             parent_session_id=decision.prev_session_id,
         )
@@ -1134,7 +1134,7 @@ class SessionStore(
                 is_fresh_reset=True,
             )
             db_create_kwargs = self._session_create_kwargs(
-                session_id=session_id, session_key=session_key, origin=old_entry.origin,
+                self, session_id=session_id, session_key=session_key, origin=old_entry.origin,
                 source_value=old_entry.platform.value if old_entry.platform else "unknown",
                 display_name=old_entry.display_name, parent_session_id=old_entry.session_id,
             )

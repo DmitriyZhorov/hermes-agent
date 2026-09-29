@@ -894,6 +894,30 @@ class SessionSessionsMixin:
             (),
         ) or 0)
 
+    def backfill_gateway_session_cwd(self, cwd: str, sources) -> int:
+        """Seed *cwd* onto legacy gateway (messaging-platform) rows lacking one.
+
+        Gateway-created rows minted before the gateway seeded ``cwd`` at creation
+        carry NULL/empty, so the desktop's project-tree grouping has nothing to
+        key on and the sessions fall out of every workspace lane (#93625). The
+        default cwd here is the same value the gateway now records at creation,
+        so this is a repair of a recording gap, not a guess about a different
+        directory. Only fills NULL/empty; an explicit value always wins. Returns
+        rows changed.
+        """
+        stamp = (cwd or "").strip()
+        source_list = [s for s in (sources or []) if (s or "").strip()]
+        if not stamp or not source_list:
+            return 0
+        placeholders = ", ".join("?" for _ in source_list)
+        return int(self._write_rowcount(
+            f"""UPDATE sessions
+                  SET cwd = ?
+                WHERE COALESCE(cwd, '') = ''
+                  AND LOWER(source) IN ({placeholders})""",
+            (stamp, *[s.strip().lower() for s in source_list]),
+        ) or 0)
+
     def _set_lineage_column(self, column: str, session_id: str, value: Any, *,
                             extra_set_sql: str = "") -> bool:
         """Set one ``sessions`` column across a whole compression lineage: Desktop projects roots
