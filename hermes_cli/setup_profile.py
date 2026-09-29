@@ -59,9 +59,13 @@ def ensure_setup_profile() -> SetupProfile:
         return SetupProfile(found[0], found[1], created=False)
     name = _free_setup_profile_name()
     path = profiles_mod.create_profile(name, clone_config=True, no_alias=True, description=SETUP_PROFILE_DESCRIPTION)
-    _write_soul(path)
-    _enable_setup_toolset(path)
-    (path / profiles_mod.SETUP_PROFILE_MARKER).write_text("{}\n", encoding="utf-8")
+    try:
+        _write_soul(path)
+        _enable_setup_toolset(path)
+        (path / profiles_mod.SETUP_PROFILE_MARKER).write_text("{}\n", encoding="utf-8")
+    except BaseException:
+        profiles_mod.delete_profile(name, yes=True)
+        raise
     return SetupProfile(name, path, created=True)
 
 

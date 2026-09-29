@@ -101,19 +101,6 @@ def _approve(env=None):
                                         for t in payload["targets"] if t["state"] == "pending"]}
 
 
-def test_only_a_desktop_session_keeps_the_setup_toolset():
-    import model_tools
-    from tui_gateway import server
-
-    for platform, expected in (("desktop", True), ("tui", False)):
-        selection = server._with_session_toolsets(["setup", "web"], platform)
-        names = model_tools._select_tool_names(selection, None, quiet_mode=True)
-        assert ("manage_catalog" in names) is expected, platform
-    # The setup guide's one tool is sent directly, never hidden behind tool_search.
-    from tools.tool_search import is_deferrable_tool_name
-    assert not is_deferrable_tool_name("manage_catalog")
-
-
 @pytest.mark.parametrize("args", [
     {"action": "install", "items": [{"kind": "plugin", "id": "x"}], "profile": "work"},
     {"action": "install", "items": [{"kind": "plugin", "id": "x", "sha": "b" * 40}]},

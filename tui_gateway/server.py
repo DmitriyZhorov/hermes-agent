@@ -1930,14 +1930,12 @@ def _with_session_toolsets(selection, platform: str | None) -> list[str]:
     [project]`` is a no-op on desktop/TUI, the only surfaces where the client toolsets exist
     (#54433). ``desktop_ui`` is kept regardless: it is the client's own control surface, not a
     model toolset."""
-    from toolsets import TOOLSET_SESSION_PLATFORMS
     surface = _gui_surface_toolsets(platform) if platform is not None else set()
-    kept = [name for name in selection if platform in TOOLSET_SESSION_PLATFORMS.get(name, {platform})]
-    fold_in = surface - set(kept)
+    fold_in = surface - set(selection)
     disabled = set(_load_disabled_toolsets() or [])
     if disabled:
         fold_in -= disabled - {"desktop_ui"}
-    return [*kept, *sorted(fold_in)]
+    return [*selection, *sorted(fold_in)]
 
 
 def _tui_notice(text: str) -> None:
@@ -1998,6 +1996,10 @@ def _load_enabled_toolsets(platform: str | None = None) -> list[str] | None:
             from agent.coding_context import coding_selection
             selection = coding_selection(platform=session_platform)
             if selection is not None:
+                from hermes_cli.config import load_config
+                from hermes_cli.tools_config import _get_platform_tools
+                from toolsets import TOOLSET_SESSION_PLATFORMS
+                selection += sorted(_get_platform_tools(load_config(), "cli") & TOOLSET_SESSION_PLATFORMS.keys())
                 return sorted(_with_session_toolsets(selection, session_platform))
     try:
         from toolsets import validate_toolset

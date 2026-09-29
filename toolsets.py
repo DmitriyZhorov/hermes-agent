@@ -389,7 +389,8 @@ def resolve_toolset(name: str, visited: Set[str] = None, *, include_registry: bo
     if name in {"all", "*"}:
         all_tools: Set[str] = set()
         for toolset_name in get_toolset_names():
-            all_tools.update(resolve_toolset(toolset_name, visited.copy(), include_registry=include_registry))
+            if toolset_name not in TOOLSET_SESSION_PLATFORMS:
+                all_tools.update(resolve_toolset(toolset_name, visited.copy(), include_registry=include_registry))
         return sorted(all_tools)
 
     # Diamond include or cycle: [] silently — the tools are collected via another path.
@@ -450,6 +451,11 @@ def get_all_toolsets() -> Dict[str, Dict[str, Any]]:
 def get_toolset_names() -> List[str]:
     """Sorted names of all toolsets (static + plugin), excluding aliases."""
     return sorted(set(TOOLSETS.keys()) | set(_plugin_display_names()))
+
+
+def session_platform_tool_drops(platform: Optional[str]) -> frozenset:
+    return frozenset(tool for name, platforms in TOOLSET_SESSION_PLATFORMS.items() if platform not in platforms
+                     for tool in resolve_toolset(name))
 
 
 def validate_toolset(name: str) -> bool:

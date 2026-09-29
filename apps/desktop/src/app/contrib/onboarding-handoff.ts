@@ -36,7 +36,7 @@ import {
   setBusy,
   setSessionOwnerHint
 } from '@/store/session'
-import { patchSessionTile } from '@/store/session-states'
+import { $sessionStates, patchSessionTile } from '@/store/session-states'
 
 import { BUILD_PROFILE, type HandoffDeps, type HandoffReceipt, paintHandoffBrief, startHandoff } from './handoff-leg'
 import { saveHandoffReceipt } from './handoff-receipt'
@@ -61,11 +61,18 @@ export function useOnboardingHandoff({
 }: OnboardingHandoffOptions) {
   const setupHandoff = useStore($setupHandoff)
   const selectedStoredId = useStore($selectedStoredSessionId)
+  const activeSessionId = useStore($activeSessionId)
 
   useEffect(() => watchPluginOutcomes(() => $setupSession.get()?.runtimeId), [])
 
   useEffect(() => {
-    if (!isOnboardingEnabled() || $setupHandoff.get() || !selectedStoredId) {
+    if (
+      !isOnboardingEnabled() ||
+      $setupHandoff.get() ||
+      !selectedStoredId ||
+      !activeSessionId ||
+      $sessionStates.get()[activeSessionId]?.storedSessionId !== selectedStoredId
+    ) {
       return
     }
 
@@ -94,7 +101,7 @@ export function useOnboardingHandoff({
       $setupSession.set({
         connectionId,
         profile: $activeGatewayProfile.get(),
-        runtimeId: $activeSessionId.get() ?? '',
+        runtimeId: activeSessionId,
         storedId: selectedStoredId
       })
       $setupHandoff.set({ task: saved.task, brief: saved.brief, plan: saved.plan, phase: 'pending' })
@@ -105,7 +112,7 @@ export function useOnboardingHandoff({
         message: error instanceof Error ? error.message : 'The first-build receipt could not be read.'
       })
     }
-  }, [selectedStoredId])
+  }, [activeSessionId, selectedStoredId])
 
   // eslint-disable-next-line no-restricted-syntax
   useEffect(() => {
