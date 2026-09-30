@@ -1593,16 +1593,16 @@ def test_install_associates_scheme_handler_with_exact_entry(tmp_path, xdg_home, 
     entry = lde.install_desktop_entry(root)
 
     assert model.set_calls == [
-        ["/usr/bin/xdg-mime", "default", "hermes.desktop", "x-scheme-handler/hermes"]
+        ["/usr/bin/xdg-mime", "default", "com.nousresearch.hermes.desktop", "x-scheme-handler/hermes"]
     ]
-    assert model.default == "hermes.desktop"  # the readback really confirmed it
-    assert entry == xdg_home / "applications" / "hermes.desktop"
+    assert model.default == "com.nousresearch.hermes.desktop"  # the readback really confirmed it
+    assert entry == xdg_home / "applications" / "com.nousresearch.hermes.desktop"
 
 
 def test_install_keeps_a_matching_association_untouched(tmp_path, xdg_home, monkeypatch):
     root = _make_project(tmp_path)
     _stub_install(tmp_path, monkeypatch)
-    model = _fake_xdg_mime(monkeypatch, default="hermes.desktop")
+    model = _fake_xdg_mime(monkeypatch, default="com.nousresearch.hermes.desktop")
 
     lde.install_desktop_entry(root)
 
@@ -1628,7 +1628,7 @@ def test_install_heals_missing_or_stale_association_without_rewriting_entry(
     assert entry is not None
     first = entry.read_text(encoding="utf-8")
     assert len(refreshes) == 1
-    assert model.default == "hermes.desktop"
+    assert model.default == "com.nousresearch.hermes.desktop"
 
     model.default = "other-handler.desktop"  # association went stale
     model.calls.clear()
@@ -1638,9 +1638,9 @@ def test_install_heals_missing_or_stale_association_without_rewriting_entry(
     assert entry2.read_text(encoding="utf-8") == first  # byte-identical
     assert len(refreshes) == 1  # no menu-cache churn
     assert model.set_calls == [
-        ["/usr/bin/xdg-mime", "default", "hermes.desktop", "x-scheme-handler/hermes"]
+        ["/usr/bin/xdg-mime", "default", "com.nousresearch.hermes.desktop", "x-scheme-handler/hermes"]
     ]
-    assert model.default == "hermes.desktop"
+    assert model.default == "com.nousresearch.hermes.desktop"
 
 
 def test_install_warns_when_xdg_mime_is_missing(tmp_path, xdg_home, monkeypatch, capsys):
@@ -1676,7 +1676,7 @@ def test_optout_leaves_existing_entry_and_association_alone(tmp_path, xdg_home, 
     root = _make_project(tmp_path)
     monkeypatch.setattr(lde, "refresh_desktop_databases", lambda _dir: [])
     monkeypatch.setattr(lde, "_launcher_entry_management_enabled", lambda: False)
-    entry = xdg_home / "applications" / "hermes.desktop"
+    entry = xdg_home / "applications" / "com.nousresearch.hermes.desktop"
     entry.parent.mkdir(parents=True)
     custom = "[Desktop Entry]\nName=Hand-Edited\nExec=/opt/custom desktop %u\n"
     entry.write_text(custom, encoding="utf-8")

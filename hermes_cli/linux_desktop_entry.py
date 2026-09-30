@@ -921,7 +921,10 @@ def install_desktop_entry(project_root: Path) -> Optional[Path]:
         # exactly what this entry exists for.
         unchanged = entry_path.is_file() and entry_path.read_text(encoding="utf-8-sig") == contents
         if unchanged:
+            # The scheme association needs no file rewrite: verify (and heal)
+            # it even when the entry itself is byte-identical.
             _report_scheme_handler_status(ensure_scheme_handler_association(entry_path))
+            return entry_path
         if not unchanged:
             # Atomic replace: an interrupted plain write leaves a zero-byte entry, which permanently
             # breaks the taskbar pin (nothing later rewrites a file that exists at the right path).
