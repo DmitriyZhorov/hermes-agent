@@ -7702,10 +7702,12 @@ function openOauthLoginWindow(
           timedOut ? `no /login response within ${INTERACTIVE_LOGIN_DEADLINE_MS}ms` : 'load failed'
         } (${error instanceof Error ? error.message : String(error)}) — showing the gateway-unreachable page`
       )
+      const code = timedOut ? undefined : (error as { code?: unknown } | null)?.code
+
       void loadOauthLoginTimeoutPage(win, {
         gatewayUrl: normalizedBase,
         timedOut,
-        errorCode: timedOut ? undefined : (error as { code?: unknown } | null)?.code
+        errorCode: typeof code === 'string' || typeof code === 'number' ? code : undefined
       })
       finish(
         new Error(
