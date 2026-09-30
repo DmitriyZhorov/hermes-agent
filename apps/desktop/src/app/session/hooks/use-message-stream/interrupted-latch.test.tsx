@@ -2,7 +2,7 @@ import type { GatewayEvent } from '@hermes/shared'
 import { act, cleanup } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { renderMessageStream, type MessageStreamHarness } from './test-harness'
+import { type MessageStreamHarness, renderMessageStream } from './test-harness'
 
 const SID = 'interrupted-latch-session'
 
