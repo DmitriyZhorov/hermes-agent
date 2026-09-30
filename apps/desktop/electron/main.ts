@@ -251,7 +251,6 @@ import {
 } from './find-in-page'
 import { createFirstRunSetupGate } from './first-run-setup-gate'
 import { registerFsIpc } from './fs-ipc'
-import { partitionIdleReapable } from './pool-reaper'
 import type {
   GatewayFileSaveContext,
   GatewayFileSaveDeps,
@@ -397,6 +396,7 @@ import {
   undialedSshRouteSeeds
 } from './plugin-profile-routes'
 import { clampPoolLimits, parsePoolLimits, POOL_LIMITS_DEFAULTS } from './pool-limits'
+import { partitionIdleReapable } from './pool-reaper'
 import { createPoolRetirer } from './pool-retire'
 import { createPoolRetirementClient } from './pool-retire-http'
 import {
