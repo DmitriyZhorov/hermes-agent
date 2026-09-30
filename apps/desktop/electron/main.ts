@@ -56,12 +56,12 @@ import {
 import { runAppInstallerChecker } from './appinstaller-checker'
 import { installApplicationMenuAfterFirstWindow } from './application-menu-startup'
 import {
+  type BackendTreeKillReason,
   describeAbruptBackendExit,
   describeRecentTreeKills,
   formatTreeKillLine,
   noteTreeKill,
   stopBackendChild as stopBackendChildImpl,
-  type BackendTreeKillReason,
   waitForBackendExit
 } from './backend-child'
 import {
@@ -4107,6 +4107,7 @@ function describeBackendOwnerForExit(pid) {
     }
 
     const whose = entry.parentPid === process.pid ? 'this-process' : `other pid ${entry.parentPid ?? '?'}`
+
     return `owner(profile=${entry.profile} parentPid=${entry.parentPid ?? '?'} ${whose})`
   } catch {
     return 'owner(unreadable ownership file)'
@@ -13663,12 +13664,14 @@ function installPreviewGuestEscapeHatch() {
 
           break
         }
+
         case 'close-preview': {
           event.preventDefault()
           sendClosePreviewRequested()
 
           break
         }
+
         default:
           break
       }
