@@ -30113,6 +30113,10 @@
             "title": "Bytes",
             "type": "integer"
           },
+          "tombstones": {
+            "title": "Tombstones",
+            "type": "integer"
+          },
           "max_per_session": {
             "title": "Max Per Session",
             "type": "integer"
@@ -30124,15 +30128,21 @@
           "max_bytes_process": {
             "title": "Max Bytes Process",
             "type": "integer"
+          },
+          "max_tombstones": {
+            "title": "Max Tombstones",
+            "type": "integer"
           }
         },
         "required": [
           "sessions",
           "events",
           "bytes",
+          "tombstones",
           "max_per_session",
           "max_bytes_per_session",
-          "max_bytes_process"
+          "max_bytes_process",
+          "max_tombstones"
         ],
         "title": "SessionEventsStatsResult",
         "type": "object"
