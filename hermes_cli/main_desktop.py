@@ -1955,13 +1955,10 @@ def cmd_gui(args: argparse.Namespace):
     if deep_link:
         # Exact URI, one argv element, no shell: the OS handed us the link and
         # the app parses it — nothing here interpolates or executes its payload.
+        # Neither launch path echoes argv (packaged: notice via
+        # _loggable_launch_command below; source: Electron logs the URI only
+        # into its own rotated logs, redacted in apps/desktop/electron/main.ts).
         launch_command.append(deep_link)
-        if source_mode:
-            # `npm exec` echoes its expanded command line (URI and all) in
-            # lifecycle notices; quiet just this child so the link's payload
-            # never reaches the console. Packaged launches don't echo argv,
-            # and no-URI source launches keep npm's normal output.
-            env["npm_config_loglevel"] = "error"
     if not source_mode:
         desktop_launch_notice(
             f"→ Launching packaged Hermes Desktop: {_loggable_launch_command(launch_command, deep_link)}"

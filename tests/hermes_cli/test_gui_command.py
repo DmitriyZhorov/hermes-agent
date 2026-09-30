@@ -1916,12 +1916,14 @@ def test_gui_forwards_uri_in_source_launch_and_redacts_it(tmp_path, monkeypatch)
     root = _make_desktop_tree(tmp_path)
     monkeypatch.setattr(cli_main, "PROJECT_ROOT", root)
     uri = "hermes-dev://blueprint/morning-brief"
-    ok = subprocess.CompletedProcess([], 0)
+    electron = root / "node_modules" / "electron"
+    (electron / "dist").mkdir(parents=True)
+    (electron / "dist" / "electron").touch()
+    (electron / "path.txt").write_text("electron\n", encoding="utf-8")
 
-    with patch("hermes_cli.main_install_repair._resolve_node_runtime_npm", return_value="/usr/bin/npm"), \
-         patch("hermes_cli.main_web_build._run_npm_install_deterministic", return_value=ok), \
+    with patch("hermes_cli.main.shutil.which", return_value="/usr/bin/npm"), \
+         patch("hermes_cli.source_build.prepare_source_dependencies", return_value=subprocess.CompletedProcess([], 0)), \
          patch("hermes_cli.main_desktop._desktop_build_needed", return_value=True), \
-         patch("hermes_cli.main_desktop._write_desktop_build_stamp"), \
          patch("hermes_cli.main_desktop._desktop_macos_relaunchable_fixup"), \
          patch("hermes_cli.main_desktop._desktop_linux_sandbox_fixup", return_value=True), \
          patch("hermes_cli.linux_desktop_entry.install_desktop_entry", return_value=None), \
@@ -1929,10 +1931,11 @@ def test_gui_forwards_uri_in_source_launch_and_redacts_it(tmp_path, monkeypatch)
          pytest.raises(SystemExit):
         cli_main.cmd_gui(_ns(source=True, uri=uri))
 
-    assert mock_run.call_args_list[1].args[0] == [
-        "/usr/bin/npm", "exec", "--", "electron", ".", uri
+    # The opened deep link is forwarded verbatim as ONE argv element after ".",
+    # exactly as the Linux launcher entry's %u hands it over.
+    assert mock_run.call_args_list[-1].args[0] == [
+        str(electron / "dist" / "electron"), ".", uri
     ]
-    assert mock_run.call_args_list[1].kwargs["env"]["npm_config_loglevel"] == "error"
     # Launch-log redaction keeps the payload out while naming the scheme.
     assert main_desktop._loggable_launch_command(
         ["hermes", "--local", uri], uri

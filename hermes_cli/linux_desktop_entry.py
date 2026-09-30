@@ -916,15 +916,9 @@ def install_desktop_entry(project_root: Path) -> Optional[Path]:
     try:
         entry_path.parent.mkdir(parents=True, exist_ok=True)
         # When nothing changed, skip the rewrite: a launch does not churn the
-        # menu caches. The scheme association is still verified (and healed if
-        # missing or stale) below — that state needs no file rewrite and is
-        # exactly what this entry exists for.
+        # menu caches. The scheme association below needs no file rewrite, so
+        # it is still verified (and healed) even when the entry is unchanged.
         unchanged = entry_path.is_file() and entry_path.read_text(encoding="utf-8-sig") == contents
-        if unchanged:
-            # The scheme association needs no file rewrite: verify (and heal)
-            # it even when the entry itself is byte-identical.
-            _report_scheme_handler_status(ensure_scheme_handler_association(entry_path))
-            return entry_path
         if not unchanged:
             # Atomic replace: an interrupted plain write leaves a zero-byte entry, which permanently
             # breaks the taskbar pin (nothing later rewrites a file that exists at the right path).

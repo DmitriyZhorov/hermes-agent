@@ -126,7 +126,6 @@ import { installCommandScreenshot } from './command-screenshot'
 import { composerImageTimestamp } from './composer-image-name'
 import { writeComposerPaste } from './composer-paste'
 import { applyConnectionChange, teardownSshState } from './connection-apply'
-import { registerDeepLinkProtocol } from './deep-link-protocol'
 import {
   connectionInstallIds,
   evictConnectionCaches,
@@ -206,6 +205,7 @@ import { liveWindowState, overlayWindowState } from './connection-window-state'
 import { describeCrashReason, installCrashForensics } from './crash-forensics'
 import { adoptServedDashboardToken, isAttachedBackendTokenDrifted, resolveServedDashboardToken } from './dashboard-token'
 import { resolveDesktopHermesHome, resolveDesktopUserData } from './data-paths'
+import { registerDeepLinkProtocol } from './deep-link-protocol'
 import { loadOrCreateInstallationId, sshOwnershipId } from './desktop-installation'
 import { formatDesktopLogLine, formatLogStamp } from './desktop-log-line'
 import {
@@ -13730,12 +13730,14 @@ function installPreviewGuestEscapeHatch() {
 
           break
         }
+
         case 'close-preview': {
           event.preventDefault()
           sendClosePreviewRequested()
 
           break
         }
+
         default:
           break
       }
@@ -19077,7 +19079,13 @@ function registerDeepLinkProtocolHandler() {
 const preReadyDockSteps = preReadyDockLaunchSteps(process.platform)
 
 if (preReadyDockSteps.includes('register-deep-link')) {
-  registerDeepLinkProtocol()
+  registerDeepLinkProtocol(app, {
+    protocol: HERMES_PROTOCOL,
+    defaultApp: Boolean(process.defaultApp),
+    argv: process.argv,
+    execPath: process.execPath,
+    resolve: p => path.resolve(p)
+  })
 }
 
 // Single-instance lock: deep links on a running app (Win/Linux) arrive as a

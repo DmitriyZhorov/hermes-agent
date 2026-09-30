@@ -518,7 +518,7 @@ def test_exec_skips_managed_environment_cli_without_desktop(
     assert entry is not None
     exec_line = _parse(entry.read_text(encoding="utf-8"))["Exec"]
 
-    assert exec_line == f"{known_wrapper} desktop"
+    assert exec_line == f"{known_wrapper} desktop %u"
     assert str(managed) not in exec_line
 
 
@@ -1495,7 +1495,7 @@ def test_install_through_wrapper_when_primary_is_incapable(tmp_path, xdg_home, m
 
     entry = lde.install_desktop_entry(root)
     assert entry == lde.desktop_entry_path()
-    assert _parse(entry.read_text(encoding="utf-8"))["Exec"] == f"{wrapper} desktop"
+    assert _parse(entry.read_text(encoding="utf-8"))["Exec"] == f"{wrapper} desktop %u"
 
 
 # #126009: the persisted launcher is a menu/taskbar click — a launch, not a
@@ -1514,7 +1514,7 @@ def test_exec_appends_skip_build_when_packaged_app_exists(tmp_path, xdg_home, mo
     entry = lde.install_desktop_entry(root)
     exec_line = _parse(entry.read_text(encoding="utf-8"))["Exec"]
 
-    assert exec_line.endswith("desktop --skip-build")
+    assert exec_line.endswith("desktop --skip-build %u")
 
 
 def test_exec_keeps_build_then_launch_when_no_packaged_app(tmp_path, xdg_home, monkeypatch):
@@ -1527,7 +1527,7 @@ def test_exec_keeps_build_then_launch_when_no_packaged_app(tmp_path, xdg_home, m
     entry = lde.install_desktop_entry(root)
     exec_line = _parse(entry.read_text(encoding="utf-8"))["Exec"]
 
-    assert exec_line.endswith("desktop")
+    assert exec_line.endswith("desktop %u")
     assert "--skip-build" not in exec_line
 # ---------------------------------------------------------------------------
 # hermes:// scheme association (xdg-mime, mocked at the subprocess boundary)
