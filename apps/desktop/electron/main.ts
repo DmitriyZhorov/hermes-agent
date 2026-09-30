@@ -114,7 +114,7 @@ import {
   BROWSER_WINDOW_WIDTH,
   buildBrowserWindowUrl
 } from './browser-windows'
-import { detectBundleSkew } from './bundle-skew'
+import { createBundleSkewChecker } from './bundle-skew'
 import { detectBundleSwap, readBundleSwapStamp } from './bundle-swap'
 import { registerChatOnboardingWindow } from './chat-onboarding-window'
 import { provisionCliLinks } from './cli-provision'
@@ -296,11 +296,13 @@ import {
 import {
   type AttachedBackend,
   attachOrReserveSpawn,
+  HOST_SPAWN_GATE_STALE_MS,
   spawnLedgerPath,
   type SpawnReservation
 } from './host-backend-attach'
 import { assertNoSecondLocalBackend, assertNotPassiveSpawn } from './host-backend-singleton'
 import { lookupPublishedSessionToken } from './host-published-token'
+import { claimHostSpawnGate } from './host-spawn-gate'
 import { requestHudClose } from './hud-close'
 import { cursorPointInWindow } from './hud-cursor'
 import { startHudGameOverlayWatch } from './hud-game-overlay'
@@ -311,7 +313,7 @@ import { applyHudElectronOverlay, promoteHudOverlay } from './hud-overlay'
 import { snapHudBounds } from './hud-snap'
 import { createHudSnapShortcut } from './hud-snap-shortcut'
 import { buildHudWindowUrl } from './hud-url'
-import { resolveHudWindowing } from './hud-windowing'
+import { linuxOzoneBackend, resolveHudWindowing } from './hud-windowing'
 import { INSTALL_STAMP, installShape } from './install-stamp'
 import type { InstallStamp } from './install-stamp'
 import { applyLaunchProfileOverride } from './launch-profile'
@@ -350,6 +352,7 @@ import {
   waitForManagedUpdateOperations
 } from './managed-ssh-update'
 import { registerMcpOauthCallbackIpc } from './mcp-oauth-callback-ipc'
+import { isMediaCapturePermission } from './media-capture-permission'
 import { createMediaProtocolHandler, MEDIA_PROTOCOL } from './media-protocol'
 import { fetchLocalMedia } from './media-range'
 import { createMinimizeToTray } from './minimize-to-tray'
@@ -368,7 +371,7 @@ import {
 } from './native-oauth'
 import { runNativeLogin } from './native-oauth-login'
 import { loadNativeTokenSet, type NativeTokenStoreIo, persistNativeTokenSet } from './native-token-store'
-import { planNoConsoleGitSpawn, setNoConsoleGitRoots, windowsGitHost } from './no-console-git'
+import { execGit, killTimedGitChildren, setNoConsoleGitRoots } from './no-console-git'
 import { registerNativeNotifications } from './notification-ipc'
 import { isExpectedOauthNavigationAbort } from './oauth-navigation'
 import { serializeJsonBody, setJsonRequestHeaders } from './oauth-net-request'
@@ -414,6 +417,7 @@ import { createKeepAwake } from './power-save'
 import { readPreUpdateBackupEnabled } from './pre-update-backup-config'
 import { capturePreviewContents } from './preview-capture'
 import { onPreviewWatchOwnerDestroyed, sendPreviewFileChangedToOwner } from './preview-file-watch'
+import { hasClosePreviewFlag, previewGuestInputAction } from './preview-guest-escape'
 import { PreviewReachRegistry } from './preview-reach'
 import {
   createPrimaryRemoteConnection,
@@ -454,7 +458,14 @@ import {
 } from './profile-session-routing'
 import { createQuickEntryShortcut, quickEntryWindowBounds, sanitizeQuickEntrySettings } from './quick-entry'
 import { createQuitFinalization } from './quit-finalization'
-import { type ActiveWork, backendOwnedByApp, mergeActiveWork, normalizeActiveWork, quitPromptFor } from './quit-guard'
+import {
+  type ActiveWork,
+  backendOwnedByApp,
+  mergeActiveWork,
+  normalizeActiveWork,
+  quitPromptFor,
+  shouldGuardWindowClose
+} from './quit-guard'
 import {
   backendQuitNeedsWait,
   backendTeardownOptions,
@@ -472,6 +483,7 @@ import {
   revalidateSuspectPooledRemoteBackends
 } from './remote-liveness'
 import { resolveRemoteOauthTicket, rosterSourceEnumerationTimeoutMs } from './remote-oauth-ticket'
+import { createRemoteOwnerCache } from './remote-owner-cache'
 import { remoteSessionCookies } from './remote-session-cookies'
 import {
   attachRemoteRequestHeaderListener,
@@ -498,7 +510,7 @@ import {
   writeSecretStoragePolicy
 } from './secret-storage-policy'
 import { selectPathsDialogProperties } from './select-paths-dialog'
-import { describeGitSpawnFailure, GIT_UNUSABLE, selectRunnableBinary } from './select-runnable-binary'
+import { selectRunnableBinary } from './select-runnable-binary'
 import {
   buildInstanceWindowUrl,
   buildSessionWindowUrl,
@@ -509,6 +521,7 @@ import {
   SESSION_WINDOW_MIN_WIDTH
 } from './session-windows'
 import { ensureLoginShellPath } from './shell-path'
+import { removeStaleSingletonLock } from './singleton-lock'
 import { createSourcePythonBackend, resolveSourceInstallationBackend, type SourceBackend } from './source-backend'
 import { resolveSourcePython } from './source-python'
 import { createBootstrapCoordinator, sshConfigFingerprint } from './ssh-bootstrap-coordinator'
@@ -533,7 +546,7 @@ import {
   windowOpacityFor,
   windowOpacityOptions
 } from './translucency'
-import { waitForUpdateClearance } from './update-gate'
+import { updateGateReason, waitForUpdateClearance } from './update-gate'
 import { readLiveUpdateMarker, updateHandoffConflict, writeUpdateMarker } from './update-marker'
 import {
   resolveUpdaterMechanism,
@@ -596,7 +609,7 @@ import {
   MIN_HEIGHT as WINDOW_MIN_HEIGHT,
   MIN_WIDTH as WINDOW_MIN_WIDTH
 } from './window-state'
-import { hiddenWindowsChildOptions } from './windows-child-options'
+import { hiddenWindowsChildOptions, windowsShellCommand } from './windows-child-options'
 import { buildPathExtCandidates, chooseUpdaterArgs, resolveVenvHermesCommand } from './windows-hermes-path'
 import {
   connectWindowsRemote,
@@ -949,10 +962,33 @@ if (INSTALL_STAMP) {
 }
 
 const DESKTOP_PROFILE_CONFIG_PATH: string = path.join(app.getPath('userData'), 'active-profile.json')
+
 // Only the lock-owning destination may adopt a workspace or start a backend.
-const isPrimaryInstance: boolean = app.requestSingleInstanceLock()
+// #78101: on Linux/X11 a zombie/defunct Electron process leaves the
+// SingletonLock symlink behind with a PID that still answers kill(pid, 0),
+// so Chromium's own liveness probe keeps refusing every later launch and the
+// app silently exits. Clear a provably-dead owner and retry once; always log
+// when the lock is legitimately lost so the exit is diagnosable.
+function acquireSingleInstanceLock(): boolean {
+  if (app.requestSingleInstanceLock()) {
+    return true
+  }
+
+  const stalePid = removeStaleSingletonLock(app.getPath('userData'))
+
+  if (stalePid !== null) {
+    console.error(`[hermes] removed stale SingletonLock (owner ${stalePid} dead); retrying launch`)
+
+    return app.requestSingleInstanceLock()
+  }
+
+  return false
+}
+
+const isPrimaryInstance: boolean = acquireSingleInstanceLock()
 
 if (!isPrimaryInstance) {
+  console.error('[hermes] another Hermes Desktop instance holds the single-instance lock; exiting')
   app.exit(0)
 }
 
@@ -1352,7 +1388,7 @@ const TITLEBAR_OVERLAY_COLOR = 'rgba(1, 0, 0, 0)'
 // Electron's own overlay drifts its hit-region under RAIL, so the renderer
 // paints its own min/max/close (wslg-window-controls.tsx) over the
 // hermes:window-control IPC channel. See titleBarOverlayOptions.
-function getTitleBarOverlayOptions() {
+function getTitleBarOverlayOptions(win?) {
   return titleBarOverlayOptions({
     platform: IS_MAC ? 'mac' : IS_WINDOWS ? 'windows' : IS_WSL ? 'wslg' : 'linux',
     darwinMajor: DARWIN_MAJOR,
@@ -1360,7 +1396,10 @@ function getTitleBarOverlayOptions() {
     color: TITLEBAR_OVERLAY_COLOR,
     foreground:
       rendererTitleBarTheme && isHexColor(rendererTitleBarTheme.foreground) ? rendererTitleBarTheme.foreground : null,
-    dark: nativeTheme.shouldUseDarkColors
+    dark: nativeTheme.shouldUseDarkColors,
+    // The native WCO buttons don't scale with the page; scale the overlay so
+    // its height tracks the zoomed renderer titlebar (#81086).
+    zoomFactor: win?.webContents?.getZoomFactor?.()
   })
 }
 
@@ -1369,7 +1408,7 @@ function getTitleBarOverlayOptions() {
 // returns false; the try/catch additionally guards builds where
 // setTitleBarOverlay isn't supported.
 function applyTitleBarOverlay(win) {
-  const options = getTitleBarOverlayOptions()
+  const options = getTitleBarOverlayOptions(win)
 
   if (!options || typeof options !== 'object') {
     return
@@ -2097,6 +2136,7 @@ const EXTERNAL_OPEN_DEPS: ExternalOpenDeps = {
   spawn: (cmd, args, opts) => spawn(cmd, args, opts),
   openExternal: url => shell.openExternal(url),
   openFile: openExternalFile,
+  openLocalPath: openLocalFilesystemPath,
   notifyFailure: broadcastOpenFailed,
   log: rememberLog
 }
@@ -2189,6 +2229,59 @@ async function openExternalFile(rawUrl: string) {
     shell.showItemInFolder(localPath)
   } catch (error) {
     rememberLog(`[file] reveal in folder failed: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+// The `hermes:openExternal` route for a BARE local filesystem path — a chat
+// media link, a markdown href, or an artifacts-panel value carrying
+// `C:\…`, `~/…`, `/…` or a UNC path instead of a `file://` URL. `new URL()`
+// cannot express those (hermes-agent 80946): resolve through the same audited
+// `resolveRequestedPathForIpc` the file route uses, then OPEN with the OS
+// handler and fall back to reveal-in-folder, mirroring openExternalFile's
+// missing-file guard so a dead path reports "File not found" instead of a
+// silent no-op. Resolves false only when the path could not be resolved at
+// all; open failures are logged (with the path, so "Failed to open path" is
+// diagnosable) and still count as handled.
+async function openLocalFilesystemPath(rawPath: string): Promise<boolean> {
+  let localPath: string
+
+  try {
+    localPath = resolveRequestedPathForIpc(String(rawPath || ''), { purpose: 'Open external file' })
+  } catch {
+    return false
+  }
+
+  try {
+    assertExistingPathForOpen(localPath, 'Open external file')
+  } catch (error) {
+    if (reportPreOpenStatFailure(error, rawPath, GUARD_REPORT_DEPS)) {
+      return true
+    }
+  }
+
+  try {
+    const errorMessage = await shell.openPath(localPath)
+
+    if (!errorMessage) {
+      return true
+    }
+
+    // Include the path so "Failed to open path" is diagnosable (hermes-agent
+    // 84361), then reveal: on Windows archive artifacts have no usable
+    // association, and the reveal never re-opens so it can't loop (#53170).
+    rememberLog(`[file] openPath failed: ${errorMessage}; path=${localPath}; revealing in folder instead`)
+
+    try {
+      shell.showItemInFolder(localPath)
+    } catch (revealError) {
+      rememberLog(`[file] showItemInFolder failed: ${revealError instanceof Error ? revealError.message : String(revealError)}; path=${localPath}`)
+    }
+
+    return true
+  } catch (error) {
+    rememberLog(`[file] openPath rejected: ${error instanceof Error ? error.message : String(error)}; path=${localPath}`)
+
+    return true
   }
 }
 
@@ -3308,57 +3401,6 @@ function resolveUpdateRoot() {
   ].filter(Boolean)
 
   return candidates.find(isGitCheckout) || candidates[0] || ACTIVE_HERMES_ROOT
-}
-
-function runGit(args, options: any = {}): Promise<{ code: number; stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const gitBinary = resolveGitBinary()
-    const gitArgs = IS_WINDOWS ? ['-c', 'windows.appendAtomically=false', ...args] : args
-    const host = IS_WINDOWS ? windowsGitHost(true) : null
-
-    const plan = planNoConsoleGitSpawn({
-      gitBin: gitBinary,
-      args: gitArgs,
-      isWindows: IS_WINDOWS,
-      pythonBin: host?.pythonBin ?? null,
-      scriptPath: host?.scriptPath ?? null,
-      env: { ...process.env, ...((options.env || {}) as any), GIT_TERMINAL_PROMPT: '0' }
-    })
-
-    const child = spawn(
-      plan.command,
-      plan.args,
-      hiddenWindowsChildOptions({
-        cwd: options.cwd,
-        env: plan.env,
-        stdio: plan.stdio
-      })
-    )
-
-    let stdout = ''
-    let stderr = ''
-    child.stdout.on('data', chunk => {
-      const text = chunk.toString()
-      stdout += text
-      options.onLine?.('stdout', text)
-    })
-    child.stderr.on('data', chunk => {
-      const text = chunk.toString()
-      stderr += text
-      options.onLine?.('stderr', text)
-    })
-    // A spawn-level failure means git itself never ran (missing, not
-    // executable, wrong CPU architecture) — a local problem, not a network one.
-    child.once('error', error => {
-      const local = describeGitSpawnFailure(error, gitBinary)
-
-      reject(local ? Object.assign(new Error(local), { kind: GIT_UNUSABLE, cause: error }) : error)
-    })
-    // 'close', not 'exit': exit can fire before the stdio pipes drain, and a
-    // resolved-early `remote get-url` came back as "" often enough to route
-    // passive checks down the wrong remote path.
-    child.once('close', (code: number): void => resolve({ code, stdout, stderr }))
-  })
 }
 
 function emitUpdateProgress(payload) {
@@ -6154,15 +6196,35 @@ async function previewFileTarget(rawTarget, baseDir) {
     }
   }
 
+  // A directory is not a preview (#101683). Overloading it as
+  // `<dir>/index.html` made a directory without one classify as missing, and
+  // the renderer's blind fallback then fabricated a broken text-preview tab.
+  // Answer with a typed non-previewable result so the card can offer the
+  // native folder action, and a typed `missing` result so a dead link reports
+  // instead of previewing.
   if (directoryExists(resolved)) {
-    resolved = path.join(resolved, 'index.html')
+    return {
+      kind: 'file',
+      label: path.basename(resolved) || resolved,
+      path: resolved,
+      previewKind: 'directory',
+      source: raw,
+      url: pathToFileURL(resolved).toString()
+    }
+  }
+
+  if (!fileExists(resolved)) {
+    return {
+      kind: 'file',
+      label: path.basename(resolved) || raw,
+      path: resolved,
+      previewKind: 'missing',
+      source: raw,
+      url: pathToFileURL(resolved).toString()
+    }
   }
 
   const ext = path.extname(resolved).toLowerCase()
-
-  if (!fileExists(resolved)) {
-    return null
-  }
 
   ;({ resolvedPath: resolved } = await resolveReadableFileForIpc(resolved, { purpose: 'Preview target' }))
 
@@ -7083,6 +7145,10 @@ function setAndPersistZoomLevel(window, zoomLevel) {
   // changes made via the keyboard shortcuts or the View menu.
   const next = applyZoomLevel(window.webContents, zoomLevel)
 
+  // The native window-controls overlay doesn't scale with the page; re-apply
+  // it at the new zoom so its height tracks the zoomed titlebar (#81086).
+  applyTitleBarOverlay(window)
+
   // Primary store: main-process JSON (survives crash recovery — #56726).
   writeZoomState(next)
   // Secondary mirror: renderer localStorage (legacy store; kept in sync so a
@@ -7121,6 +7187,7 @@ function restorePersistedZoomLevel(window) {
     }
 
     applyZoomLevel(window.webContents, saved)
+    applyTitleBarOverlay(window)
 
     return
   }
@@ -7129,6 +7196,7 @@ function restorePersistedZoomLevel(window) {
   // doesn't flash Chromium 100%, then try localStorage for pre-JSON installs
   // and overwrite if a legacy value is there.
   applyZoomLevel(window.webContents, DEFAULT_ZOOM_LEVEL)
+  applyTitleBarOverlay(window)
 
   window.webContents
     .executeJavaScript(
@@ -7142,6 +7210,7 @@ function restorePersistedZoomLevel(window) {
       const level = stored == null ? DEFAULT_ZOOM_LEVEL : Number(stored)
       const applied = applyZoomLevel(window.webContents, level)
       writeZoomState(applied)
+      applyTitleBarOverlay(window)
     })
     .catch(error => rememberLog(`[zoom] restore failed: ${error?.message || error}`))
 }
@@ -7211,47 +7280,6 @@ function installContextMenuBridge(window: BrowserWindow) {
   })
 }
 
-// Microphone and camera capture. The voice composer drives mic access and
-// renderer features (e.g. desktop plugins) can drive camera access, both
-// through getUserMedia, which Chromium gates behind these two session hooks.
-//
-// The naive `details.mediaTypes.includes('audio')` check works on macOS but
-// breaks on Windows: Chromium frequently fires the request with an empty or
-// undefined `mediaTypes`, so a strict check denies it and getUserMedia throws
-// NotAllowedError. We therefore allow the capture permissions and treat absent
-// metadata as allowed.
-//
-// Granting here is not the last gate: the OS still applies its own capture
-// permission (macOS TCC prompts on first use, per the NSMicrophone/NSCamera
-// usage strings), so the user keeps a real allow/deny and can revoke it in
-// System Settings afterwards.
-function isMediaCapturePermission(permission, details) {
-  // HTML5 video/audio fullscreen asks the request handler for 'fullscreen'
-  // and the check handler for 'automatic-fullscreen'. Both must be allowed
-  // or the native fullscreen button on <video controls> does nothing.
-  if (permission === 'fullscreen' || permission === 'automatic-fullscreen') {
-    return true
-  }
-
-  if (permission === 'audioCapture' || permission === 'videoCapture') {
-    return true
-  }
-
-  if (permission !== 'media') {
-    return false
-  }
-
-  const mediaTypes = details?.mediaTypes
-
-  // Windows: mediaTypes is often empty for a capture request. Don't deny on
-  // missing metadata.
-  if (!Array.isArray(mediaTypes) || mediaTypes.length === 0) {
-    return true
-  }
-
-  return mediaTypes.includes('audio') || mediaTypes.includes('video')
-}
-
 // Chromium-initiated downloads (renderer anchor/blob downloads, drag-outs)
 // land here. Without a handler the OS save dialog opens with the process cwd
 // as the default directory (win-unpacked in packaged installs) and whatever
@@ -7291,14 +7319,12 @@ function installMediaPermissions() {
   // Synchronous check handler: Chromium consults this for getUserMedia on
   // Windows in addition to (or instead of) the request handler. Without it,
   // the check defaults to false and capture is denied before the request
-  // handler ever runs.
+  // handler ever runs. The check handler carries no mediaTypes metadata, so
+  // the shared predicate runs with `undefined` details and allows the capture
+  // permissions — identical policy to the request handler below, just without
+  // the metadata refinement (absent metadata is allowed there too).
   session.defaultSession.setPermissionCheckHandler((_webContents, permission) => {
-    return (
-      permission === 'media' ||
-      (permission as string) === 'automatic-fullscreen' ||
-      permission === ('audioCapture' as any) /* todo: is this needed? */ ||
-      permission === ('videoCapture' as any)
-    )
+    return isMediaCapturePermission(permission, undefined)
   })
 }
 
@@ -12257,7 +12283,7 @@ async function runPoolBackendStart(
   assertPoolEntryStillOwned(poolKey, entry, backendPool, localBackendLifecycle.signal)
 
   const child = spawnOwnedBackend(
-    backend.command,
+    windowsShellCommand(backend.command, Boolean(backend.shell)),
     backend.args,
     hiddenWindowsChildOptions({
       cwd: hermesCwd,
@@ -12580,6 +12606,8 @@ async function exitAfterBackendShutdown(code) {
     // Already logged by backendShutdown; the exit must still happen.
   }
 
+  // app.exit() skips will-quit, and every in-app relaunch lands here.
+  killTimedGitChildren()
   app.exit(code)
 }
 
@@ -12758,24 +12786,10 @@ function hostSpawnGateDeps() {
         return null
       }
     },
-    take: () => {
-      const gatePath = hostSpawnGatePath()
-
-      try {
-        fs.writeFileSync(gatePath, JSON.stringify({ pid: process.pid, startedAt: Date.now() }), { mode: 0o600 })
-      } catch {
-        // A gate we cannot write is a race we cannot win; spawning anyway is
-        // exactly today's behaviour, so never fail boot over it.
-      }
-
-      return () => {
-        try {
-          fs.unlinkSync(gatePath)
-        } catch {
-          // Already gone / never written.
-        }
-      }
-    },
+    take: () =>
+      claimHostSpawnGate(hostSpawnGatePath(), {
+        staleAfterMs: HOST_SPAWN_GATE_STALE_MS
+      }),
     sleep: (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
   }
 }
@@ -13150,7 +13164,7 @@ async function runHermesStart({ supervisorRecovery = false }: { supervisorRecove
     backendConnectionState.assertCurrentAttempt(connectionAttempt)
 
     const hermesProcess = spawnOwnedBackend(
-      backend.command,
+      windowsShellCommand(backend.command, Boolean(backend.shell)),
       backend.args,
       hiddenWindowsChildOptions({
         cwd: hermesCwd,
@@ -13548,6 +13562,47 @@ function wireCommonWindowHandlers(win, { zoom = true }: { zoom?: boolean } = {})
 }
 
 /**
+ * The guaranteed exit path for a fullscreened preview guest (#97213).
+ *
+ * `before-input-event` fires on the guest's own webContents before the page
+ * sees the key, so this works even while the guest holds fullscreen input
+ * focus — the one interception point neither the renderer (no focus
+ * visibility into the guest) nor the OS (Wayland has no xdotool/wmctrl) can
+ * provide. The routing decision lives in preview-guest-escape.ts.
+ */
+function installPreviewGuestEscapeHatch() {
+  app.on('web-contents-created', (_event, contents) => {
+    if (contents.getType() !== 'webview') {
+      return
+    }
+
+    contents.on('before-input-event', (event, input) => {
+      const owner = BrowserWindow.fromWebContents(contents.hostWebContents ?? contents)
+
+      switch (previewGuestInputAction(input, Boolean(owner?.isFullScreen()))) {
+        case 'exit-fullscreen': {
+          event.preventDefault()
+
+          if (owner && !owner.isDestroyed()) {
+            owner.setFullScreen(false)
+          }
+
+          break
+        }
+        case 'close-preview': {
+          event.preventDefault()
+          sendClosePreviewRequested()
+
+          break
+        }
+        default:
+          break
+      }
+    })
+  })
+}
+
+/**
  * Give the preview pane's `<webview>` guests a preload — and ONLY those
  * guests. The pane's webview is the one `webview` tag in the app and it
  * always carries the `persist:hermes-preview` partition, so the partition is
@@ -13650,6 +13705,7 @@ function spawnSecondaryWindow({
 
   // Chat-surface registration: applyWindowTranslucency swaps this window's
   // backing between opaque-themed and alpha-0 when glass toggles.
+  registerChatWindow(win)
   minimizeToTray.registerWindow(win)
   translucencyBackedWindows.add(win)
 
@@ -13860,6 +13916,7 @@ function createInstanceWindow(
     webPreferences: chatWindowWebPreferences(PRELOAD_PATH)
   })
 
+  registerChatWindow(win)
   instanceWindows.add(win)
   minimizeToTray.registerWindow(win)
   recordWindowConnectionRoute(win.webContents, { ...route, registryScoped: route.connectionId !== null })
@@ -14947,6 +15004,7 @@ function createWindow() {
 
   const createdMainWindow = mainWindow
   minimizeToTray.registerWindow(createdMainWindow, { closeToTray: true })
+  registerChatWindow(createdMainWindow)
   const defaultRoute = desktopProfilePreferences.getDefault()
 
   if (defaultRoute) {
@@ -17049,11 +17107,11 @@ async function remoteSessionList(profile, searchParams) {
 }
 
 // #85834: find which remote profile owns a session id when the caller gave no
-// profile hint (pure lookup lives in profile-session-routing.ts). Results are
-// memoized briefly so a burst of hint-less reads (transcript + messages)
-// costs one sweep across the configured remotes.
-const remoteOwnerBySessionId = new Map<string, { at: number; profile: null | string }>()
-const REMOTE_OWNER_CACHE_TTL_MS = 30_000
+// profile hint (pure lookup lives in profile-session-routing.ts; the bounded
+// memo lives in remote-owner-cache.ts — #58485: it only ever INSERTS, so the
+// raw Map grew one entry per session id ever resolved, unbounded, on the main
+// process heap).
+const remoteOwnerCache = createRemoteOwnerCache()
 
 async function remoteOwnerProfileForSession(sessionId: string) {
   if (!sessionId) {
@@ -17066,9 +17124,9 @@ async function remoteOwnerProfileForSession(sessionId: string) {
     return null
   }
 
-  const cached = remoteOwnerBySessionId.get(sessionId)
+  const cached = remoteOwnerCache.fresh(sessionId)
 
-  if (cached && Date.now() - cached.at < REMOTE_OWNER_CACHE_TTL_MS) {
+  if (cached) {
     return cached.profile
   }
 
@@ -17076,7 +17134,7 @@ async function remoteOwnerProfileForSession(sessionId: string) {
     remoteSessionList(profile, params)
   ).catch(() => null)
 
-  remoteOwnerBySessionId.set(sessionId, { at: Date.now(), profile: owner })
+  remoteOwnerCache.remember(sessionId, owner)
 
   return owner
 }
@@ -17743,10 +17801,33 @@ ipcMain.handle('hermes:stopPreviewFileWatch', (_event, id) => stopPreviewFileWat
 // merged picture. Keyed by webContents id so a closed window stops counting.
 const activeWorkByWebContents = new Map<number, ActiveWork>()
 
+// Synchronous, webContents-independent cache of the most recent active-work
+// summary we heard from *any* renderer. The per-webContents map above is
+// dropped the moment a webContents is destroyed (a stream can reload its
+// webContents mid-turn), so at quit time it can read empty even though a turn
+// is live. This cached value survives that and is what the quit guard falls
+// back to. It is only ever refreshed by real publishes, so an idle app
+// (count=0) clears it — no false positives after a turn ends.
+let lastActiveWorkSeen: ActiveWork = { count: 0, titles: [] }
+
+// Every window that hosts a chat surface (primary, session, instance). The
+// last-window close guard below is installed centrally for all of them.
+const chatWindows = new Set<BrowserWindow>()
+
+function hasOtherChatWindows(window: BrowserWindow): boolean {
+  return [...chatWindows].some(candidate => candidate !== window && !candidate.isDestroyed())
+}
+
 // The same merged picture drives background throttling: chat windows run
 // unthrottled while any turn is in flight (streaming must paint while hidden)
 // and fall back to Chromium's default throttling at idle. See stream-throttle.ts.
-const streamThrottle = createStreamThrottle()
+const streamThrottle = createStreamThrottle(undefined, undefined, {
+  // #94865 is specific to native Wayland fullscreen surfaces. Reuse the same
+  // Ozone resolver as the rest of Desktop so XWayland/macOS/Windows retain the
+  // normal idle throttling contract.
+  keepFullscreenPainting:
+    process.platform === 'linux' && linuxOzoneBackend(process.env, process.argv) === 'wayland'
+})
 
 function updateStreamThrottleFromActiveWork() {
   streamThrottle.update(mergeActiveWork(activeWorkByWebContents.values()).count > 0)
@@ -17762,7 +17843,9 @@ ipcMain.on('hermes:active-work', (event, payload) => {
     })
   }
 
-  activeWorkByWebContents.set(id, normalizeActiveWork(payload))
+  const work = normalizeActiveWork(payload)
+  activeWorkByWebContents.set(id, work)
+  lastActiveWorkSeen = work
   updateStreamThrottleFromActiveWork()
 })
 
@@ -17832,6 +17915,7 @@ app.on('before-quit', () => {
 // Close the pooled keep-alive sockets on quit so lingering connections can't
 // hold the event loop open or leak FDs past app teardown.
 app.on('will-quit', () => {
+  killTimedGitChildren()
   sshIsolatedKeepalives.stopAll()
   destroyKeepaliveAgents()
   nativeNotifications.dispose()
@@ -18236,10 +18320,10 @@ const disposeTerminalSession = terminalIpc.disposeTerminalSession
 ipcMain.handle(
   'hermes:updates:check',
   async (_event: Electron.IpcMainInvokeEvent, opts?: { force?: boolean }): Promise<UpdaterStatusWire> =>
-    checkUpdates({ force: Boolean(opts?.force) }).catch((error: Error & { kind?: string }): UpdaterStatusWire => ({
+    checkUpdates({ force: Boolean(opts?.force) }).catch((error: Error): UpdaterStatusWire => ({
       supported: true,
       branch: readDesktopUpdateConfig().branch,
-      error: error?.kind === GIT_UNUSABLE ? GIT_UNUSABLE : 'check-failed',
+      error: 'check-failed',
       message: error?.message || String(error),
       fetchedAt: Date.now()
     }))
@@ -18279,8 +18363,14 @@ function resolveHermesVersion(scope: { connectionId?: string; profile?: string }
 // apps/desktop/, and warn when the running renderer is provably behind.
 // Fail-quiet: dev runs (no stamp), non-git builds, and shallow-clone gaps all
 // report in-sync rather than risk a false "your install is torn" warning.
+const checkRendererSkew = createBundleSkewChecker(
+  INSTALL_STAMP,
+  (args, options) => execGit(resolveGitBinary(), args, options),
+  { isUpdating: () => updateGateReason(updateGateDeps()) !== null }
+)
+
 async function detectRendererSkew() {
-  return detectBundleSkew(INSTALL_STAMP, runGit, resolveUpdateRoot())
+  return checkRendererSkew(resolveUpdateRoot())
 }
 
 // Re-resolve the live Hermes version and push it into the native About panel
@@ -18737,6 +18827,29 @@ function handleDeepLink(url) {
     return
   }
 
+  // hermes://close-preview — the out-of-band exit hatch for a preview pane
+  // that fullscreened itself and now owns all input (#97213). Handled here
+  // rather than in the renderer because the whole point is to work when the
+  // renderer cannot hear anything: exit the fullscreen window and close the
+  // pane from the main process.
+  if (kind === 'close-preview') {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) {
+        mainWindow.restore()
+      }
+
+      mainWindow.focus()
+
+      if (mainWindow.isFullScreen()) {
+        mainWindow.setFullScreen(false)
+      }
+
+      sendClosePreviewRequested()
+    }
+
+    return
+  }
+
   if (!_rendererReadyForDeepLink || !mainWindow || mainWindow.isDestroyed()) {
     _pendingDeepLink = payload
 
@@ -18832,6 +18945,14 @@ if (!isPrimaryInstance) {
   }
 
   app.on('second-instance', (_event, argv) => {
+    // --close-preview: the same escape hatch as hermes://close-preview, for
+    // environments where spawning a URL is harder than a flag (kiosk launchers,
+    // SSH-started sessions). Checked before deep links so a carried `hermes://`
+    // URL still routes normally when no flag is present.
+    if (hasClosePreviewFlag(argv)) {
+      handleDeepLink('hermes://close-preview')
+    }
+
     const url = _extractDeepLink(argv)
 
     if (url) {
@@ -18925,6 +19046,7 @@ app.whenReady().then(async () => {
     registerDeepLinkProtocol()
   }
 
+  installPreviewGuestEscapeHatch()
   installPreviewGuestPreload()
 
   ensureWslWindowsFonts()
@@ -19075,11 +19197,12 @@ function heldQuitForActiveWork(event: Electron.Event): boolean {
     return true
   }
 
-  const prompt = quitPromptFor(
-    mergeActiveWork(activeWorkByWebContents.values()),
-    isQuittingForHandoff,
-    quitStopsBackendWork()
-  )
+  // The per-webContents map can read empty at quit time even though a turn
+  // is live (a stream can reload its webContents mid-turn, dropping the entry
+  // before the guard runs), so merge in the last summary any renderer sent.
+  const work = mergeActiveWork([...activeWorkByWebContents.values(), lastActiveWorkSeen])
+
+  const prompt = quitPromptFor(work, isQuittingForHandoff, quitStopsBackendWork())
 
   // A tray quit with live work still needs the ordinary visible confirmation.
   if (prompt && minimizeToTray.status().available) {
@@ -19122,6 +19245,35 @@ function heldQuitForActiveWork(event: Electron.Event): boolean {
     })
 
   return true
+}
+
+// Intercept the close of the LAST chat window while the window and its
+// active-work report are still alive. On Windows/Linux the primary quit
+// gesture is the title-bar close button: closing the final window destroys
+// its webContents (clearing the active-work map) BEFORE window-all-closed
+// reactively calls app.quit() — by the time before-quit runs, heldQuitForActiveWork
+// finds nothing and the app exits silently (#96139). Running the same guard
+// here, on the close event itself, catches it in time; "Quit Anyway" re-enters
+// before-quit with the latch set and falls through.
+function registerChatWindow(window: BrowserWindow) {
+  chatWindows.add(window)
+  window.on('close', (event: Electron.Event) => {
+    // The tray's close-to-tray handler runs first (registered first) and
+    // absorbs the close into a hide — the work keeps running, so there is
+    // nothing to confirm.
+    if (event.defaultPrevented) {
+      return
+    }
+
+    const work = mergeActiveWork(activeWorkByWebContents.values())
+
+    if (!shouldGuardWindowClose(work, isQuittingForHandoff, IS_MAC, hasOtherChatWindows(window))) {
+      return
+    }
+
+    heldQuitForActiveWork(event)
+  })
+  window.once('closed', () => chatWindows.delete(window))
 }
 
 app.on('before-quit', event => {
