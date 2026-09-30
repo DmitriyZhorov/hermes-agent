@@ -44,6 +44,7 @@ import {
 } from '@/store/profile'
 import { $projectScope, ALL_PROJECTS } from '@/store/project-scope'
 import { $projectTree } from '@/store/projects'
+import { $notifications } from '@/store/notifications'
 import {
   $activeSessionId,
   $activeSessionStoredIdRotation,
@@ -2949,6 +2950,83 @@ describe('branchStoredSession desktop source tagging', () => {
     await expect(branchCurrentSession!(undefined, 'tile-runtime')).resolves.toBe(false)
     expect(bindGatewayRequestForOwner).not.toHaveBeenCalled()
     expect(requestGateway).not.toHaveBeenCalled()
+  })
+
+  it('fails closed when an explicit offscreen target vanished from the runtime cache, never branching the foreground', async () => {
+    // /branch from a tile arrives with the tile's runtime id. If that runtime
+    // disappeared from the session-state cache (reconnect, orphan-reap,
+    // eviction) mid-dispatch, the explicit target must fail closed with a
+    // warning — falling through to the foreground's transcript would branch
+    // an unrelated conversation (the cross-session branch bug).
+    const requestGateway = vi.fn(async () => ({}) as never)
+    const bindGatewayRequestForOwner = vi.fn()
+    let branchCurrentSession: ((messageId?: string, targetSessionId?: string) => Promise<boolean>) | null = null
+
+    render(
+      <BranchHarness
+        activeSessionId="foreground-runtime"
+        bindGatewayRequestForOwner={bindGatewayRequestForOwner as never}
+        onCurrentReady={branch => (branchCurrentSession = branch)}
+        onReady={() => undefined}
+        requestGateway={requestGateway}
+        selectedStoredSessionId="foreground-stored"
+        sessionStateByRuntimeIdRef={{ current: new Map<string, ClientSessionState>() }}
+      />
+    )
+    await waitFor(() => expect(branchCurrentSession).not.toBeNull())
+
+    await expect(branchCurrentSession!(undefined, 'vanished-tile-runtime')).resolves.toBe(false)
+    // Fail closed: no RPC at all, and nothing that could have read the
+    // foreground transcript or minted a branch from it.
+    expect(requestGateway).not.toHaveBeenCalled()
+    expect(bindGatewayRequestForOwner).not.toHaveBeenCalled()
+    expect($notifications.get()).toEqual([
+      expect.objectContaining({ kind: 'warning', title: 'Nothing to branch' })
+    ])
+  })
+
+  it('refuses to branch a busy tile from the tile runtime busy state, not the foreground busy flag', async () => {
+    // /branch from a live tile must consult the tile's OWN busy state: an
+    // in-flight tile turn branches stale history otherwise. The foreground
+    // busy flag is deliberately the opposite, so a foreground-keyed gate
+    // would have let the branch through.
+    const tileMessages: ClientSessionState['messages'] = [
+      { id: 'tile-q', role: 'user', parts: [{ type: 'text', text: 'tile question' }] }
+    ]
+
+    const busyTileState = {
+      ...createClientSessionState('tile-stored', tileMessages),
+      busy: true,
+      cwd: '/tile/workspace'
+    }
+
+    const sessionStateByRuntimeIdRef = {
+      current: new Map<string, ClientSessionState>([['tile-runtime', busyTileState]])
+    }
+
+    const requestGateway = vi.fn(async () => ({}) as never)
+    const bindGatewayRequestForOwner = vi.fn()
+    let branchCurrentSession: ((messageId?: string, targetSessionId?: string) => Promise<boolean>) | null = null
+
+    render(
+      <BranchHarness
+        activeSessionId="foreground-runtime"
+        bindGatewayRequestForOwner={bindGatewayRequestForOwner as never}
+        busy={false}
+        onCurrentReady={branch => (branchCurrentSession = branch)}
+        onReady={() => undefined}
+        requestGateway={requestGateway}
+        sessionStateByRuntimeIdRef={sessionStateByRuntimeIdRef}
+      />
+    )
+    await waitFor(() => expect(branchCurrentSession).not.toBeNull())
+
+    await expect(branchCurrentSession!(undefined, 'tile-runtime')).resolves.toBe(false)
+    expect(requestGateway).not.toHaveBeenCalled()
+    expect(bindGatewayRequestForOwner).not.toHaveBeenCalled()
+    expect($notifications.get()).toEqual([
+      expect.objectContaining({ kind: 'warning', title: 'Session busy' })
+    ])
   })
 
   it.each(['removed', 'rebound'] as const)(
