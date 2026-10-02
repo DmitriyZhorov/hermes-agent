@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { __resetElapsedTimerRegistryForTests } from '@/components/chat/activity-timer'
 import { setSessionCompacting } from '@/store/compaction'
-import { $activeSessionId, $busy, $turnStartedAt } from '@/store/session'
+import { $activeSessionId, $turnStartedAt } from '@/store/session'
 
 import { stubThreadEnvironment, stubThreadViewportSize, userMessage } from '../test-utils'
 
@@ -55,9 +55,8 @@ function runningAssistantMessage(id: string, text: string): ThreadMessage {
 }
 
 function Harness({ messages, isRunning = false }: { messages: ThreadMessage[]; isRunning?: boolean }) {
-  // The runtime adapter is idle to avoid auto-appending a placeholder to
-  // trailing user/system rows. The session's busy claim independently owns
-  // whether the tail activity row may render.
+  // isRunning: false at the runtime level. Per-message `status: {type:
+  // 'running'}` is what drives TurnActivityIndicator mounting.
   // Passing isRunning: true makes useExternalStoreRuntime auto-append a
   // synthetic empty trailing assistant placeholder whenever the last message
   // is not already a running assistant, such as the trailing user prompt
@@ -90,7 +89,6 @@ describe('TurnActivityIndicator tail gating (#68634)', () => {
   afterEach(() => {
     cleanup()
     setSessionCompacting(sessionId, false)
-    $busy.set(false)
     $activeSessionId.set(null)
     $turnStartedAt.set(null)
     __resetElapsedTimerRegistryForTests()
@@ -98,8 +96,6 @@ describe('TurnActivityIndicator tail gating (#68634)', () => {
   })
 
   it('renders exactly one indicator, on the later bubble, when two assistant bubbles are running with content', () => {
-    $busy.set(true)
-
     const { container } = render(
       <Harness
         messages={[

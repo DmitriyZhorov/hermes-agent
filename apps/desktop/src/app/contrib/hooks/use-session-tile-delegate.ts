@@ -239,22 +239,7 @@ export function useSessionTileDelegate({
           return false
         }
 
-        updateSessionState(runtimeId, state => ({
-          ...state,
-          awaitingResponse: false,
-          busy: false,
-          turnLive: false,
-          turnStartedAt: null
-        }))
-
-        return true
-      },
-      updateHeldSession: (runtimeId, updater) => {
-        if (!sessionStateByRuntimeIdRef.current.has(runtimeId)) {
-          return false
-        }
-
-        updateSessionState(runtimeId, updater)
+        updateSessionState(runtimeId, state => ({ ...state, awaitingResponse: false, busy: false }))
 
         return true
       },

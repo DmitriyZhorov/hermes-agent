@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
-import { type ChatMessage, finalizeInterruptedMessages, textPart } from '@/lib/chat-messages'
+import { type ChatMessage, textPart } from '@/lib/chat-messages'
 import { createClientSessionState } from '@/lib/chat-runtime'
 
 import {
   appendMidTurnUserMessage,
   applyReloadOptimistic,
   applyRewindOptimistic,
+  finalizeInterruptedMessages,
   finalizeUserInterruptedMessages,
   planEdit,
   planReload,

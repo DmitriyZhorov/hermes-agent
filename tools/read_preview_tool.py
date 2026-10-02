@@ -20,6 +20,4 @@ def read_preview_tool(
         "read_preview is only available in the Hermes desktop app.",
         "start and count must be integers.",
         "Failed to read the preview pane: ",
-        "No preview tab answered: no page is loaded (call open_preview first), "
-        "or the bridge timed out. If the pane IS open, the desktop app may be older "
-        "than this backend — update it and retry."))
+        "No preview tab is open, or the read timed out."))

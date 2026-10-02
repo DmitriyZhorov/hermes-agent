@@ -8,7 +8,6 @@ export {
   collectUnspokenTurnSpeech,
   completeOpenTimelineParts,
   dedupeRepeatedTextInParts,
-  finalizeInterruptedMessages,
   mergeFinalAssistantText,
   normalizeWs,
   reasoningPart,

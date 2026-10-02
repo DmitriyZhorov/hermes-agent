@@ -3,7 +3,8 @@ import { useEffect, useState } from 'react'
 
 import { messages } from '../i18n/runtime.js'
 import { useT } from '../i18n/useT.js'
-import { clarifyAnswerText, clarifyRevisitState } from '../lib/text.js'
+import { isMac } from '../lib/platform.js'
+import { clarifyBatchRevisitState } from '../lib/text.js'
 import type { Theme } from '../theme.js'
 import type { ApprovalReq, ClarifyReq, ConfirmReq } from '../types.js'
 
@@ -147,86 +148,80 @@ export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptPr
   )
 }
 
-export function ClarifyPrompt({ cols = 80, onCancel, onQuestionAnswer, req, t }: ClarifyPromptProps) {
+export function ClarifyPrompt({ cols = 80, onAnswer, onCancel, onQuestionAnswer, req, t }: ClarifyPromptProps) {
   const T = useT()
   const [sel, setSel] = useState(0)
   const [custom, setCustom] = useState('')
   const [typing, setTyping] = useState(false)
-  const [picked, setPicked] = useState<string[]>([])
-  const questions = req.questions
+  const choices = req.choices ?? []
+  const batch = req.questions ?? []
+  const isBatch = batch.length > 0
 
   // ── Batch (A-compact) state: status list + one expanded active question.
   // `active` walks the QUESTION list (Tab/Shift-Tab cycle it, any order);
   // `sel` is reused as the cursor within the active question's choice rows.
   const answers = req.answers ?? {}
-  const firstUnanswered = questions.findIndex(q => answers[q.qid] === undefined)
+  const firstUnanswered = batch.findIndex(q => answers[q.qid] === undefined)
   const [active, setActive] = useState(Math.max(0, firstUnanswered))
 
   const moveActive = (delta: number) => {
-    const next = (active + delta + questions.length) % questions.length
-    const question = questions[next]
-
+    const next = (active + delta + batch.length) % batch.length
+    const question = batch[next]
     // Re-visit restore, same model as the CLI panel: a choice answer puts
     // the cursor back on its row; a typed answer lands on Other with the
     // text staged so Enter edits it instead of retyping.
-    const restored = clarifyRevisitState(
-      question?.choices ?? [],
-      question ? answers[question.qid] : undefined,
-      question?.multiSelect
-    )
+    const restored = clarifyBatchRevisitState(question?.choices ?? [], question ? answers[question.qid] : undefined)
 
     setActive(next)
     setSel(restored.sel)
     setCustom(restored.custom)
     setTyping(false)
-    setPicked(restored.picked)
   }
 
   // After a lock the overlay is re-patched with the new answers map — jump
   // the cursor to the next unanswered question (stay put when editing).
   useEffect(() => {
-    const current = questions[active]
+    if (!isBatch) {
+      return
+    }
+
+    const current = batch[active]
 
     if (current && answers[current.qid] === undefined) {
       return
     }
 
-    const next = questions.findIndex(q => answers[q.qid] === undefined)
+    const next = batch.findIndex(q => answers[q.qid] === undefined)
 
     if (next >= 0) {
       setActive(next)
       setSel(0)
       setCustom('')
       setTyping(false)
-      setPicked([])
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by the answers map only
   }, [req.answers])
 
-  const activeQuestion = questions[active]
-  const activeChoices = activeQuestion?.choices ?? []
-  const multi = activeQuestion?.multiSelect ?? false
-  const answeredCount = questions.filter(q => answers[q.qid] !== undefined).length
-  const remainingCount = questions.length - answeredCount
+  const heading = (
+    <Text bold>
+      <Text color={t.color.accent}>ask</Text>
+      <Text color={t.color.text}> {isBatch ? `${batch.length} questions` : req.question}</Text>
+    </Text>
+  )
+
+  const activeQuestion = isBatch ? batch[active] : undefined
+  const activeChoices = activeQuestion ? (activeQuestion.choices ?? []) : choices
+  const answeredCount = isBatch ? batch.filter(q => answers[q.qid] !== undefined).length : 0
+  const remainingCount = isBatch ? batch.length - answeredCount : 0
 
   const lockActive = (value: string) => {
     if (activeQuestion) {
-      onQuestionAnswer(activeQuestion.qid, value)
+      onQuestionAnswer?.(activeQuestion.qid, value)
       setSel(0)
       setCustom('')
       setTyping(false)
-      setPicked([])
     }
   }
-
-  const lockPicked = (extra: string[]) => {
-    const values = [...picked, ...extra.map(v => v.trim()).filter(Boolean)]
-
-    lockActive(values.length ? JSON.stringify(values) : '')
-  }
-
-  const togglePick = (choice: string) =>
-    setPicked(current => (current.includes(choice) ? current.filter(v => v !== choice) : [...current, choice]))
 
   useInput((ch, key) => {
     if (key.escape) {
@@ -245,22 +240,54 @@ export function ClarifyPrompt({ cols = 80, onCancel, onQuestionAnswer, req, t }:
       return
     }
 
-    // Tab / Shift-Tab cycle the active question (with wrap) — the
-    // selected question is always the expanded one, like the CLI panel.
-    if (key.tab) {
-      moveActive(key.shift ? -1 : 1)
+    if (isBatch) {
+      // Tab / Shift-Tab cycle the active question (with wrap) — the
+      // selected question is always the expanded one, like the CLI panel.
+      if (key.tab) {
+        moveActive(key.shift ? -1 : 1)
+
+        return
+      }
+
+      if (!activeQuestion) {
+        return
+      }
+
+      if (activeChoices.length === 0) {
+        // Open-ended question: any keypress starts typing (TextInput below).
+        setTyping(true)
+
+        return
+      }
+
+      if (key.upArrow && sel > 0) {
+        setSel(s => s - 1)
+      }
+
+      if (key.downArrow && sel < activeChoices.length) {
+        setSel(s => s + 1)
+      }
+
+      if (key.return) {
+        if (sel === activeChoices.length) {
+          setTyping(true)
+        } else if (activeChoices[sel]) {
+          lockActive(activeChoices[sel]!)
+        }
+
+        return
+      }
+
+      const n = parseInt(ch)
+
+      if (n >= 1 && n <= activeChoices.length) {
+        lockActive(activeChoices[n - 1]!)
+      }
 
       return
     }
 
-    if (!activeQuestion) {
-      return
-    }
-
-    if (activeChoices.length === 0) {
-      // Open-ended question: any keypress starts typing (TextInput below).
-      setTyping(true)
-
+    if (!choices.length) {
       return
     }
 
@@ -268,115 +295,126 @@ export function ClarifyPrompt({ cols = 80, onCancel, onQuestionAnswer, req, t }:
       setSel(s => s - 1)
     }
 
-    if (key.downArrow && sel < activeChoices.length) {
+    if (key.downArrow && sel < choices.length) {
       setSel(s => s + 1)
     }
 
     if (key.return) {
-      if (sel === activeChoices.length) {
-        setTyping(true)
-      } else if (multi) {
-        lockPicked(picked.length ? [] : [activeChoices[sel]!])
-      } else if (activeChoices[sel]) {
-        lockActive(activeChoices[sel]!)
-      }
-
-      return
-    }
-
-    if (multi && ch === ' ' && sel < activeChoices.length) {
-      togglePick(activeChoices[sel]!)
-
-      return
+      sel === choices.length ? setTyping(true) : choices[sel] && onAnswer(choices[sel]!)
     }
 
     const n = parseInt(ch)
 
-    if (n >= 1 && n <= activeChoices.length) {
-      if (multi) {
-        togglePick(activeChoices[n - 1]!)
-      } else {
-        lockActive(activeChoices[n - 1]!)
-      }
+    if (n >= 1 && n <= choices.length) {
+      onAnswer(choices[n - 1]!)
     }
   })
 
-  const enterAction = remainingCount === 1 ? T.prompt.clarify.confirmAndContinue : T.prompt.clarify.lockAnswer
+  if (isBatch) {
+    const enterAction = remainingCount === 1 ? T.prompt.clarify.confirmAndContinue : T.prompt.clarify.lockAnswer
+    const hint = typing ? T.prompt.clarify.batchTypingHint(enterAction) : T.prompt.clarify.batchHint(enterAction)
 
-  const hint = typing
-    ? T.prompt.clarify.typingHint(enterAction)
-    : multi
-      ? `${T.prompt.clarify.toggle} · ${T.prompt.clarify.hint(enterAction)}`
-      : T.prompt.clarify.hint(enterAction)
+    return (
+      <Box flexDirection="column">
+        {heading}
+
+        {batch.map((q, i) => {
+          const answer = answers[q.qid]
+          const isActive = i === active
+          const marker = answer !== undefined ? '✓' : isActive ? '▸' : '·'
+
+          return (
+            <Box flexDirection="column" key={q.qid}>
+              <Text>
+                <Text bold={isActive} color={isActive ? t.color.text : t.color.muted}>
+                  {marker} {q.question}
+                </Text>
+              </Text>
+
+              {answer !== undefined ? (
+                // The locked answer on its own line, in the ok color, so the
+                // current answers stay readable while Tab walks the list.
+                <Box paddingLeft={2}>
+                  <Text color={answer ? t.color.ok : t.color.muted} italic={!answer}>
+                    {answer || T.prompt.clarify.skipped}
+                  </Text>
+                </Box>
+              ) : null}
+
+              {isActive ? (
+                typing || activeChoices.length === 0 ? (
+                  <Box paddingLeft={2}>
+                    <Text color={t.color.label}>{'> '}</Text>
+                    <TextInput
+                      color={t.color.text}
+                      columns={Math.max(20, cols - 8)}
+                      onChange={setCustom}
+                      onSubmit={lockActive}
+                      value={custom}
+                    />
+                  </Box>
+                ) : (
+                  <Box flexDirection="column" paddingLeft={2}>
+                    {[...activeChoices, T.prompt.clarify.other].map((c, ci) => (
+                      <Text key={ci}>
+                        <Text color={t.color.muted} {...chipRowProps(t, sel === ci)}>
+                          {sel === ci ? '▸ ' : '  '}
+                          {ci + 1}. {c}
+                        </Text>
+                      </Text>
+                    ))}
+                  </Box>
+                )
+              ) : null}
+            </Box>
+          )
+        })}
+
+        <Text color={t.color.muted}>
+          {answeredCount}/{batch.length} answered · {hint}
+        </Text>
+      </Box>
+    )
+  }
+
+  if (typing || !choices.length) {
+    return (
+      <Box flexDirection="column">
+        {heading}
+
+        <Box>
+          <Text color={t.color.label}>{'> '}</Text>
+          <TextInput
+            color={t.color.text}
+            columns={Math.max(20, cols - 6)}
+            onChange={setCustom}
+            onSubmit={onAnswer}
+            value={custom}
+          />
+        </Box>
+
+        <Text color={t.color.muted}>
+          {T.prompt.clarify.typingHint(choices.length ? T.prompt.clarify.back : T.prompt.clarify.cancel)}{' '}
+          {isMac ? T.prompt.clarify.macClipboardHint : T.prompt.clarify.ctrlCCancel}
+        </Text>
+      </Box>
+    )
+  }
 
   return (
     <Box flexDirection="column">
-      <Text bold>
-        <Text color={t.color.accent}>ask</Text>
-        <Text color={t.color.text}>
-          {' '}
-          {questions.length === 1
-            ? T.session.main.clarifyQuestionsOne('1')
-            : T.session.main.clarifyQuestionsOther(String(questions.length))}
+      {heading}
+
+      {[...choices, T.prompt.clarify.other].map((c, i) => (
+        <Text key={i}>
+          <Text color={t.color.muted} {...chipRowProps(t, sel === i)}>
+            {sel === i ? '▸ ' : '  '}
+            {i + 1}. {c}
+          </Text>
         </Text>
-      </Text>
+      ))}
 
-      {questions.map((q, i) => {
-        const answer = answers[q.qid]
-        const isActive = i === active
-        const marker = answer !== undefined ? '✓' : isActive ? '▸' : '·'
-
-        return (
-          <Box flexDirection="column" key={q.qid}>
-            <Text>
-              <Text bold={isActive} color={isActive ? t.color.text : t.color.muted}>
-                {marker} {q.question}
-              </Text>
-            </Text>
-
-            {answer !== undefined ? (
-              // The locked answer on its own line, in the ok color, so the
-              // current answers stay readable while Tab walks the list.
-              <Box paddingLeft={2}>
-                <Text color={answer ? t.color.ok : t.color.muted} italic={!answer}>
-                  {answer ? clarifyAnswerText(answer, q.multiSelect) : T.prompt.clarify.skipped}
-                </Text>
-              </Box>
-            ) : null}
-
-            {isActive ? (
-              typing || activeChoices.length === 0 ? (
-                <Box paddingLeft={2}>
-                  <Text color={t.color.label}>{'> '}</Text>
-                  <TextInput
-                    color={t.color.text}
-                    columns={Math.max(20, cols - 8)}
-                    onChange={setCustom}
-                    onSubmit={value => (multi ? lockPicked([value]) : lockActive(value))}
-                    value={custom}
-                  />
-                </Box>
-              ) : (
-                <Box flexDirection="column" paddingLeft={2}>
-                  {[...activeChoices, T.prompt.clarify.other].map((c, ci) => (
-                    <Text key={ci}>
-                      <Text color={t.color.muted} {...chipRowProps(t, sel === ci)}>
-                        {sel === ci ? '▸ ' : '  '}
-                        {multi && ci < activeChoices.length ? (picked.includes(c) ? '[x] ' : '[ ] ') : ''}
-                        {ci + 1}. {c}
-                      </Text>
-                    </Text>
-                  ))}
-                </Box>
-              )
-            ) : null}
-          </Box>
-        )
-      })}
-
-      <Text color={t.color.muted}>
-        {answeredCount}/{questions.length} answered · {hint}
-      </Text>
+      <Text color={t.color.muted}>↑/↓ select · Enter confirm · 1-{choices.length} quick pick · Esc/Ctrl+C cancel</Text>
     </Box>
   )
 }
@@ -453,8 +491,10 @@ interface ApprovalPromptProps {
 
 interface ClarifyPromptProps {
   cols?: number
+  onAnswer: (s: string) => void
   onCancel: () => void
-  onQuestionAnswer: (qid: string, s: string) => void
+  /** Batch mode: lock one question's answer (clarify.respond + question_id). */
+  onQuestionAnswer?: (qid: string, s: string) => void
   req: ClarifyReq
   t: Theme
 }

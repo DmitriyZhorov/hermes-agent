@@ -54,10 +54,7 @@ def drive_preview_tool(
     except Exception as exc:
         return tool_error(f"Failed to act on the in-app browser: {exc}")
     if not raw:
-        return tool_error(
-            "No GUI window answered with a page: no preview tab is open. "
-            "Open a page with open_preview first. If the pane IS open, the desktop app "
-            "may be older than this backend — its bridge-unavailable error names that case.")
+        return tool_error("The action timed out, or no GUI window answered. Open a page with open_preview first.")
     return passthrough_json(raw)
 
 

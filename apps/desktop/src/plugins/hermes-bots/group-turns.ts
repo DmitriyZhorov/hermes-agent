@@ -155,6 +155,9 @@ function pickStrandedGroupTurnReply(messages: GroupTurnTranscriptMessage[], befo
 /** A clarify question blocking inside a member's session, as `session.resume`
  *  reports it. Older backends omit the field entirely. */
 interface GroupPendingClarify {
+  choices?: string[]
+  multi_select?: unknown
+  question?: unknown
   questions?: GroupPromptQuestion[]
   request_id?: string
 }
@@ -697,9 +700,12 @@ export function syncGroupClarify(
       ? {
           ...base,
           kind: 'clarify',
+          question: typeof clarify.question === 'string' ? clarify.question : '',
+          choices: Array.isArray(clarify.choices) ? clarify.choices.filter(c => typeof c === 'string' && c) : [],
+          multiSelect: Boolean(clarify.multi_select),
           // Batch clarifies carry `questions`; the room card answers them
           // one wire call per question, mirroring the 1:1 batch contract.
-          questions: Array.isArray(clarify.questions) ? clarify.questions : []
+          questions: Array.isArray(clarify.questions) ? clarify.questions : null
         }
       : {
           ...base,
@@ -711,7 +717,9 @@ export function syncGroupClarify(
           choices:
             Array.isArray(approval.choices) && approval.choices.length
               ? approval.choices.filter(c => typeof c === 'string' && c)
-              : ['once', 'deny']
+              : ['once', 'deny'],
+          multiSelect: false,
+          questions: null
         }
   })
 
@@ -791,13 +799,14 @@ export function renameGroupClarify(oldName: string, newName: string) {
  *  to the member's OWN source (requestForBot), so cross-connection members work.
  *  - clarify: `clarify.lock` per question, sequentially — the LAST lock
  *    resolves the blocked server request (same contract as the 1:1 batch
- *    card).
+ *    card). A single question answers the open request by id through
+ *    `request.answer` (the cross-socket proxy for a response frame).
  *  - approval: `approval.respond` with the choice (once/session/always/deny),
  *    keyed by session + request_id — the queue-level wire every surface shares. */
 export async function answerGroupClarify(
   entry: GroupPrompt,
   member: GroupMember,
-  answers: Record<string, null | string> | string | undefined
+  answers: Record<string, string> | string | undefined
 ) {
   let group = entry.group
 
@@ -819,14 +828,22 @@ export async function answerGroupClarify(
         },
         { timeoutMs: APPROVAL_RESPOND_TIMEOUT_MS }
       )
-    } else {
+    } else if (entry.questions && entry.questions.length) {
       for (const question of entry.questions) {
+        // Question ids are opaque on the wire (`GroupPrompt.questions` types
+        // them `unknown`); the batch card keys its answer bag by exactly them.
+        const qid = (question?.qid ?? question?.id) as string
         await requestForBot(member, 'clarify.lock', {
           request_id: entry.requestId,
-          question_id: question.qid,
-          answer: (answers as Record<string, null | string>)?.[question.qid] ?? null
+          question_id: qid,
+          answer: (answers as Record<string, string>)?.[qid] ?? ''
         })
       }
+    } else {
+      await requestForBot(member, 'request.answer', {
+        id: entry.requestId,
+        result: { answer: typeof answers === 'string' ? answers : '' }
+      })
     }
 
     if (!binding.isLive()) {

@@ -10,17 +10,9 @@
  * no caller needs one.
  */
 export interface SessionCreateOverrides {
-  /** Renderer-only handoff, fired at the stored-id assignment before navigation. */
-  onComposerScopeAssigned?: (scope: string) => void
   reasoningEffort?: string
   title?: string
 }
-
-export type CreateBackendSessionForSend = (
-  preview?: string | null,
-  seedMessages?: SessionSeedMessage[],
-  createOverrides?: SessionCreateOverrides
-) => Promise<string | null>
 
 export interface SessionSeedMessage {
   content: string

@@ -15,7 +15,7 @@ import {
   type SlashChipKind,
   slashIconElement
 } from '@/components/assistant-ui/directive-text'
-import { referenceKind, referenceRe, unwrapReferenceValue } from '@/components/assistant-ui/reference-kinds'
+import { referenceKind, referenceRe } from '@/components/assistant-ui/reference-kinds'
 
 import { slashCommandMatches, type SlashCommandScanOptions } from './slash-refs'
 
@@ -106,7 +106,11 @@ export function escapeHtml(value: string) {
 }
 
 export function unquoteRef(raw: string) {
-  return unwrapReferenceValue(raw)
+  const head = raw[0]
+  const tail = raw[raw.length - 1]
+  const quoted = (head === '`' && tail === '`') || (head === '"' && tail === '"') || (head === "'" && tail === "'")
+
+  return quoted ? raw.slice(1, -1) : raw.replace(/[,.;!?]+$/, '')
 }
 
 /** Always-quote variant of formatRefValue — chips need a fence even for safe values. */

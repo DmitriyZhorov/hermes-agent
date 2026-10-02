@@ -37,21 +37,26 @@ class ClarifyQuestion(Params):
 
 
 class ClarifyRequestParams(ServerRequestParams):
-    """``answers`` rides only on a reconnect replay (locks the server already accepted; null = skipped)."""
+    """Single question: ``question`` / ``choices`` (/ ``multi_select``); batch: ``questions``.
+    ``answers`` rides only on a reconnect replay (locks the server already accepted)."""
 
-    questions: list[ClarifyQuestion]
-    answers: dict[str, str | None] | None = None
+    question: str | None = None
+    choices: list[str] | None = None
+    multi_select: bool | None = None
+    questions: list[ClarifyQuestion] | None = None
+    answers: dict[str, str] | None = None
 
 
 class ClarifyResult(Result):
-    """``{answers}`` for the whole set (early locks go through the ``clarify.lock`` RPC); a response
-    without ``answers`` is cancel-all."""
+    """Single: ``{answer}`` ('' = skip). Batch: ``{answers}`` for the whole set (early locks go through
+    the ``clarify.lock`` RPC); a response with neither is cancel-all."""
 
-    answers: dict[str, str | None] | None = None
+    answer: str | None = None
+    answers: dict[str, str] | None = None
 
 
 server_request("clarify", params=ClarifyRequestParams, result=ClarifyResult,
-               doc="The clarify tool: ask the user 1-5 questions.")
+               doc="The clarify tool: ask the user one question or a batch.")
 
 
 # ── approval ──────────────────────────────────────────────────────────────────────────────────

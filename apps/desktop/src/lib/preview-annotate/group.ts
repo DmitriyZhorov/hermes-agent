@@ -161,9 +161,8 @@ function refine(groups: AnnotateGroup[], total: number): AnnotateGroup[] {
  */
 function flattenNested(groups: AnnotateGroup[]): AnnotateGroup[] {
   const firstNumber = (group: AnnotateGroup) => group.items[0]?.number ?? 0
-
-  const selectorsOf = (group: AnnotateGroup) => group.items.map(item => item.identity?.selector || '').filter(Boolean)
-
+  const selectorsOf = (group: AnnotateGroup) =>
+    group.items.map(item => item.identity?.selector || '').filter(Boolean)
   const owns = (parent: AnnotateGroup, child: AnnotateGroup): boolean => {
     const parents = selectorsOf(parent)
     const children = selectorsOf(child)
@@ -176,7 +175,6 @@ function flattenNested(groups: AnnotateGroup[]): AnnotateGroup[] {
       parents.some(parentSel => childSel === parentSel || childSel.startsWith(`${parentSel}>`))
     )
   }
-
   const sorted = [...groups].sort((left, right) => {
     const leftMin = Math.min(...selectorsOf(left).map(sel => sel.length))
     const rightMin = Math.min(...selectorsOf(right).map(sel => sel.length))
@@ -187,7 +185,6 @@ function flattenNested(groups: AnnotateGroup[]): AnnotateGroup[] {
 
     return firstNumber(left) - firstNumber(right)
   })
-
   const kept: AnnotateGroup[] = []
 
   for (const group of sorted) {
@@ -199,7 +196,6 @@ function flattenNested(groups: AnnotateGroup[]): AnnotateGroup[] {
       const key = sharedSelectorPrefix(selectorsOf(parent))
       parent.key = key
       parent.label = labelFor(key)
-
       continue
     }
 

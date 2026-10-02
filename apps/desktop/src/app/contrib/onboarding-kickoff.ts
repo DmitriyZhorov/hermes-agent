@@ -50,7 +50,7 @@ export interface OnboardingKickoffOptions extends Pick<
 interface SetupStatus {
   ready?: boolean
   provider_configured?: boolean
-  free_tier_route?: boolean
+  free_tier?: boolean
 }
 
 interface GuideSession {
@@ -61,7 +61,7 @@ interface GuideSession {
 export async function adoptGuideSession(
   setupProfile: string,
   canonical: GuideSession,
-  freeTierRoute: SetupStatus['free_tier_route'],
+  freeTier: SetupStatus['free_tier'],
   resumeSession: OnboardingKickoffOptions['resumeSession'],
   guideRequest: AmbientGatewayRequest
 ): Promise<void> {
@@ -89,7 +89,7 @@ export async function adoptGuideSession(
   })
   prefetchGuideCatalogs(canonical.id, adoptedRuntimeId ?? canonical.id)
 
-  if (freeTierRoute) {
+  if (freeTier) {
     await guideRequest('config.set', {
       session_id: adoptedRuntimeId,
       key: 'reasoning',
@@ -148,7 +148,7 @@ export function useOnboardingKickoff({
       const canonical = registryHit?.sessions?.[0]
 
       if (canonical?.id) {
-        await adoptGuideSession(setupProfile, canonical, record.free_tier_route, resumeSession, guideRequest)
+        await adoptGuideSession(setupProfile, canonical, record.free_tier, resumeSession, guideRequest)
 
         return true
       }
@@ -160,13 +160,13 @@ export function useOnboardingKickoff({
 
       const seedMessages = buildChatOnboardingSeedMessages(
         pickOnboardingGreeting(),
-        record.free_tier_route !== true,
+        record.free_tier !== true,
         capabilities
       )
 
       const createOverrides: SessionCreateOverrides = { title: SETUP_CHAT_TITLE }
 
-      if (record.free_tier_route) {
+      if (record.free_tier) {
         createOverrides.reasoningEffort = 'minimal'
       }
 
@@ -193,7 +193,7 @@ export function useOnboardingKickoff({
       await adoptGuideSession(
         setupProfile,
         { id: storedId ?? runtimeId },
-        record.free_tier_route,
+        record.free_tier,
         resumeSession,
         guideRequest
       )

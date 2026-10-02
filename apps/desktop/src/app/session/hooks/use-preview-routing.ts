@@ -7,8 +7,7 @@ import { reachablePreviewUrl } from '@/lib/preview-reach'
 import {
   $previewTabs,
   beginPreviewServerRestart,
-  closeBrowserPreviewMatchingLiveUrl,
-  closeDockedPreviewMatching,
+  closePreviewMatching,
   closeRightRail,
   completePreviewServerRestart,
   openPreview,
@@ -127,6 +126,10 @@ export function usePreviewRouting({ baseHandleGatewayEvent, currentCwd, requestG
           return
         }
 
+        if (closePreviewMatching(target)) {
+          return
+        }
+
         void normalizeOrLocalPreviewTarget(target, $currentCwd.get() || currentCwd || undefined).then(
           async resolved => {
             const candidates = [target]
@@ -139,9 +142,7 @@ export function usePreviewRouting({ baseHandleGatewayEvent, currentCwd, requestG
               }
             }
 
-            if (!closeBrowserPreviewMatchingLiveUrl(...candidates)) {
-              closeDockedPreviewMatching(...candidates)
-            }
+            closePreviewMatching(...candidates)
           }
         )
 

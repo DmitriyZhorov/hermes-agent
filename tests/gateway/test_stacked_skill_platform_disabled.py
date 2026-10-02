@@ -100,7 +100,8 @@ def skills_env(tmp_path, monkeypatch):
     import tools.skills_tool as skills_tool_module
     monkeypatch.setattr(skills_tool_module, "SKILLS_DIR", skills_dir)
     import agent.skill_commands as skill_commands_mod
-    skill_commands_mod._skill_commands_by_key = {}
+    skill_commands_mod._skill_commands = {}
+    skill_commands_mod._skill_commands_platform = None
     return skills_dir
 
 

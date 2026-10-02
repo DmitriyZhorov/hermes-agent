@@ -18,8 +18,7 @@ import {
   adoptNewSessionDraft,
   type ComposerAttachment,
   type ComposerDraftSyncMode,
-  freshDraftScope,
-  isFreshDraftScope,
+  NEW_SESSION_DRAFT_KEY,
   onComposerDraftSyncRequest,
   reloadPersistedDrafts,
   stashSessionDraft,
@@ -301,9 +300,8 @@ export function useComposerDraft({
           const ids = [sessionIdRef.current, activeQueueSessionKeyRef.current].filter((id): id is string => Boolean(id))
 
           // A surface with no session yet IS the new-chat draft (the stash keys
-          // it by the fresh-draft key); once one opens, the new-chat draft
-          // belongs elsewhere.
-          return ids.length ? ids : [freshDraftScope()]
+          // it '__new__'); once one opens, the new-chat draft belongs elsewhere.
+          return ids.length ? ids : [NEW_SESSION_DRAFT_KEY]
         },
         isActive: () => getActiveComposer() === target
       },
@@ -512,14 +510,14 @@ export function useComposerDraft({
     window.clearTimeout(draftPersistTimerRef.current)
     pendingDraftPersistRef.current = null
 
-    // A new chat writes to its own pre-session bucket (the per-lifecycle fresh
-    // key) until its stored id arrives; the assigning site announces that id
-    // (store/composer.ts). Move the bucket at this handoff — after the outgoing
-    // cleanup stashed the live editor text under it, before the incoming scope
-    // is restored — so the text the user kept typing follows the chat instead
-    // of vanishing. Keyed on the scope alone: the runtime id can land a resume
-    // later than the route flips the scope, so it is not a usable signal here.
-    if ((isFreshDraftScope(draftScopeRef.current) || !draftScopeRef.current) && activeQueueSessionKey) {
+    // A new chat writes to the shared pre-session bucket until its stored id
+    // arrives; the assigning site announces that id (store/composer.ts). Move
+    // the bucket at this handoff — after the outgoing cleanup stashed the live
+    // editor text under it, before the incoming scope is restored — so the
+    // text the user kept typing follows the chat instead of vanishing.
+    // Keyed on the scope alone: the runtime id can land a resume later than
+    // the route flips the scope, so it is not a usable signal here.
+    if (!draftScopeRef.current && activeQueueSessionKey) {
       adoptNewSessionDraft(activeQueueSessionKey)
     } else if (!activeQueueSessionKey) {
       // The reverse handoff: a session the user was typing into turned out
@@ -614,7 +612,6 @@ export function useComposerDraft({
   return {
     activeQueueSessionKeyRef,
     clearDraft,
-    draftScopeRef,
     draftRef,
     editorRef,
     focusInput,

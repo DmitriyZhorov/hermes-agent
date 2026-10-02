@@ -3,7 +3,6 @@ import path from 'node:path'
 
 import { sourceDeclaresServe } from './backend-command'
 import { execProbe, isTimeoutError, PROBE_TIMEOUT_MS } from './backend-probes'
-import { windowsShellCommand } from './windows-child-options'
 
 interface ServeCandidate {
   command?: string | null
@@ -66,7 +65,7 @@ export function createBackendServeSupportResolver(hermesHome: string, rememberLo
           // is cached for the process lifetime, silently routing a modern
           // runtime through the legacy `dashboard` form. Share the probe budget
           // and its timeout-only retry instead of a thinner local bound.
-          await execProbe(windowsShellCommand(backend.command, Boolean(backend.shell)), [...prefix, 'serve', '--help'], {
+          await execProbe(backend.command, [...prefix, 'serve', '--help'], {
             cwd: backend.root || undefined,
             env: { ...process.env, HERMES_HOME: hermesHome, ...(backend.env || {}) },
             timeout: PROBE_TIMEOUT_MS,

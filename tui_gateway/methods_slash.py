@@ -323,8 +323,7 @@ def _mirror_prompt(sid, session, agent, arg) -> None:
         agent._cached_system_prompt = None
 
 
-_FAST_TIERS = {"fast": "priority", "on": "priority", "normal": None, "off": None, "auto": "auto", "cold": "cold",
-               "ultrafast": "ultrafast"}
+_FAST_TIERS = {"fast": "priority", "on": "priority", "normal": None, "off": None, "auto": "auto", "cold": "cold"}
 
 
 def _mirror_fast(sid, session, agent, arg) -> None:

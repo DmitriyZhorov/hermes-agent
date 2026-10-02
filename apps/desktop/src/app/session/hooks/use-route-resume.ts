@@ -30,7 +30,7 @@ interface RouteResumeOptions {
   runtimeIdByStoredSessionIdRef: MutableRefObject<Map<string, string>>
   selectedStoredSessionId: string | null
   selectedStoredSessionIdRef: MutableRefObject<string | null>
-  startFreshSessionDraft: (options: boolean | { replaceRoute?: boolean; rotateFreshDraftKey?: boolean }) => unknown
+  startFreshSessionDraft: (focus: boolean) => unknown
 }
 
 // Bounded auto-retry for a stranded session window. A resume can fail terminally
@@ -210,7 +210,7 @@ export function useRouteResume({
     ) {
       // A fresh draft is a real navigation — any later resume homes normally.
       bootResumeRef.current = false
-      startFreshSessionDraft({ replaceRoute: true, rotateFreshDraftKey: false })
+      startFreshSessionDraft(true)
     }
   }, [
     activeSessionId,

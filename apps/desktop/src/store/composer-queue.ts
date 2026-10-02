@@ -59,11 +59,6 @@ const load = (): QueueState => {
   }
 }
 
-// Cleared when a save throws (quota, unavailable storage): storage then lags
-// the atom, so mutations build on the atom instead and the queue keeps working
-// in-memory for this window.
-let storageCurrent = typeof window !== 'undefined'
-
 const save = (state: QueueState) => {
   if (typeof window === 'undefined') {
     return
@@ -75,10 +70,8 @@ const save = (state: QueueState) => {
     } else {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
     }
-
-    storageCurrent = true
   } catch {
-    storageCurrent = false
+    // best-effort: storage may be unavailable, queue still works in-memory
   }
 }
 
@@ -111,20 +104,11 @@ const setParked = (sid: string, parked: boolean) => {
   $parkedQueueSessions.set(next)
 }
 
-const current = (): QueueState => (storageCurrent ? load() : $queuedPromptsBySession.get())
-
-// Apply `op` to the LIVE persisted queue, not to one derived from the in-memory
-// atom: another window may have written since our last storage event, into any
-// session including this one, and saving our stale snapshot would drop its
-// entries (#46732). `op` returns the next queue, or null for no change.
-const mutateSession = (sid: string, op: (queue: QueuedPromptEntry[]) => null | QueuedPromptEntry[]): boolean => {
-  const live = current()
-  const queue = op(live[sid] ?? [])
-
-  if (!queue) {
-    return false
-  }
-
+const writeSession = (sid: string, queue: QueuedPromptEntry[]) => {
+  // Merge over the LIVE persisted map, not the in-memory atom: another window
+  // may have written its own sessions' queues between our last sync and now,
+  // and writing our whole snapshot back would clobber those entries (#46732).
+  const live = load()
   const next: QueueState = { ...live }
 
   if (queue.length === 0) {
@@ -141,8 +125,6 @@ const mutateSession = (sid: string, op: (queue: QueuedPromptEntry[]) => null | Q
     // linger as stale state and silently gate entries queued much later.
     setParked(sid, false)
   }
-
-  return true
 }
 
 if (typeof window !== 'undefined') {
@@ -179,22 +161,6 @@ export const getQueuedPrompts = (key: string | null | undefined): QueuedPromptEn
   return sid ? queueFor(sid) : []
 }
 
-/**
- * Run one drain of a session's queue while holding its cross-window claim, with
- * `task` given that queue read fresh INSIDE the claim. Every idle window
- * auto-drains the shared queue, so a renderer-local flag cannot stop two of
- * them submitting the same entry — and the gateway runs the second copy as its
- * own turn. Web Locks are arbitrated by the browser across windows and freed if
- * the holder closes; a waiting window then finds an entry the holder sent
- * already gone. Without Web Locks there is no other window to exclude.
- */
-export const withQueueDrainClaim = <T>(sid: string, task: (queue: QueuedPromptEntry[]) => Promise<T>): Promise<T> => {
-  const run = () => task(current()[sid] ?? [])
-  const locks = typeof navigator === 'undefined' ? undefined : navigator.locks
-
-  return locks ? locks.request(`${STORAGE_KEY}.drain.${sid}`, run) : run()
-}
-
 export const enqueueQueuedPrompt = (
   key: string | null | undefined,
   payload: { text: string; attachments: ComposerAttachment[]; displayText?: string; displayKind?: 'hidden' }
@@ -214,15 +180,12 @@ export const enqueueQueuedPrompt = (
     queuedAt: Date.now()
   }
 
-  // Queueing a fresh prompt is fresh intent to keep the conversation
-  // moving — lift the persisted drain-failure budget off the entries
-  // already waiting there, exactly like the park (#98015). The op runs
-  // against the live persisted queue (mutateSession), so a same-session
-  // write from another window that has not fired its storage event yet
-  // is merged, not clobbered (#123249).
-  mutateSession(
+  writeSession(
     sid,
-    queue => [...queue.map(e => (e.drainFailures ? { ...e, drainFailures: undefined } : e)), entry]
+    // Queueing a fresh prompt is fresh intent to keep the conversation
+    // moving — lift the persisted drain-failure budget off the entries
+    // already waiting there, exactly like the park (#98015).
+    [...queueFor(sid).map(e => (e.drainFailures ? { ...e, drainFailures: undefined } : e)), entry]
   )
   // Queueing a new prompt is fresh intent to keep the conversation moving —
   // a park from an earlier Stop must not hold this (or the entries ahead of
@@ -239,14 +202,14 @@ export const dequeueQueuedPrompt = (key: string | null | undefined): null | Queu
     return null
   }
 
-  let head: null | QueuedPromptEntry = null
+  const [head, ...rest] = queueFor(sid)
+
+  if (!head) {
+    return null
+  }
 
   // Caller takes ownership of head.attachments (including any blob: previews).
-  mutateSession(sid, ([first, ...rest]) => {
-    head = first ?? null
-
-    return first ? rest : null
-  })
+  writeSession(sid, rest)
 
   return head
 }
@@ -262,17 +225,15 @@ export const removeQueuedPrompt = (
     return false
   }
 
-  let removed: QueuedPromptEntry | undefined
+  const queue = queueFor(sid)
+  const removed = queue.find(e => e.id === id)
+  const next = queue.filter(e => e.id !== id)
 
-  mutateSession(sid, queue => {
-    removed = queue.find(e => e.id === id)
-
-    return removed ? queue.filter(e => e.id !== id) : null
-  })
-
-  if (!removed) {
+  if (!removed || next.length === queue.length) {
     return false
   }
+
+  writeSession(sid, next)
 
   if (!options?.retainPreviewUrls) {
     revokeAttachmentPreviewUrls(removed.attachments)
@@ -292,13 +253,16 @@ export const noteQueuedPromptDrainFailure = (key: string | null | undefined, id:
     return
   }
 
-  mutateSession(sid, queue => {
-    if (!queue.some(e => e.id === id)) {
-      return null
-    }
+  const queue = queueFor(sid)
 
-    return queue.map(e => (e.id === id ? { ...e, drainFailures: (e.drainFailures ?? 0) + 1 } : e))
-  })
+  if (!queue.some(e => e.id === id)) {
+    return
+  }
+
+  writeSession(
+    sid,
+    queue.map(e => (e.id === id ? { ...e, drainFailures: (e.drainFailures ?? 0) + 1 } : e))
+  )
 }
 
 /** Clear a queued entry's persisted drain-failure budget — the queue-panel
@@ -312,13 +276,16 @@ export const clearQueuedPromptDrainFailures = (key: string | null | undefined, i
     return
   }
 
-  mutateSession(sid, queue => {
-    if (!queue.some(e => e.id === id && e.drainFailures)) {
-      return null
-    }
+  const queue = queueFor(sid)
 
-    return queue.map(e => (e.id === id ? { ...e, drainFailures: undefined } : e))
-  })
+  if (!queue.some(e => e.id === id && e.drainFailures)) {
+    return
+  }
+
+  writeSession(
+    sid,
+    queue.map(e => (e.id === id ? { ...e, drainFailures: undefined } : e))
+  )
 }
 
 export const promoteQueuedPrompt = (key: string | null | undefined, id: string): boolean => {
@@ -328,11 +295,17 @@ export const promoteQueuedPrompt = (key: string | null | undefined, id: string):
     return false
   }
 
-  return mutateSession(sid, queue => {
-    const index = queue.findIndex(e => e.id === id)
+  const queue = queueFor(sid)
+  const index = queue.findIndex(e => e.id === id)
 
-    return index <= 0 ? null : [queue[index]!, ...queue.slice(0, index), ...queue.slice(index + 1)]
-  })
+  if (index <= 0) {
+    return false
+  }
+
+  const entry = queue[index]!
+  writeSession(sid, [entry, ...queue.slice(0, index), ...queue.slice(index + 1)])
+
+  return true
 }
 
 export const updateQueuedPrompt = (
@@ -346,36 +319,41 @@ export const updateQueuedPrompt = (
     return false
   }
 
-  return mutateSession(sid, queue => {
-    let changed = false
+  const queue = queueFor(sid)
+  let changed = false
 
-    const next = queue.map(entry => {
-      if (entry.id !== id) {
-        return entry
-      }
+  const next = queue.map(entry => {
+    if (entry.id !== id) {
+      return entry
+    }
 
-      const attachments = update.attachments ? cloneAttachments(update.attachments) : entry.attachments
+    const attachments = update.attachments ? cloneAttachments(update.attachments) : entry.attachments
 
-      if (entry.text === update.text && !update.attachments) {
-        return entry
-      }
+    if (entry.text === update.text && !update.attachments) {
+      return entry
+    }
 
-      if (update.attachments) {
-        revokeDiscardedAttachmentPreviews(entry.attachments, attachments)
-      }
+    if (update.attachments) {
+      revokeDiscardedAttachmentPreviews(entry.attachments, attachments)
+    }
 
-      changed = true
+    changed = true
 
-      // The user rewrote the text, so any display projection it carried (a
-      // `/skill` invocation standing in for the expanded body) no longer
-      // describes it — what they typed is now what sends.
-      const { displayText: _dropped, ...rest } = entry
+    // The user rewrote the text, so any display projection it carried (a
+    // `/skill` invocation standing in for the expanded body) no longer
+    // describes it — what they typed is now what sends.
+    const { displayText: _dropped, ...rest } = entry
 
-      return { ...rest, text: update.text, attachments }
-    })
-
-    return changed ? next : null
+    return { ...rest, text: update.text, attachments }
   })
+
+  if (!changed) {
+    return false
+  }
+
+  writeSession(sid, next)
+
+  return true
 }
 
 export const updateQueuedPromptText = (key: string | null | undefined, id: string, text: string): boolean =>
@@ -384,17 +362,15 @@ export const updateQueuedPromptText = (key: string | null | undefined, id: strin
 export const clearQueuedPrompts = (key: string | null | undefined) => {
   const sid = sidOf(key)
 
-  if (!sid) {
+  if (!sid || !(sid in $queuedPromptsBySession.get())) {
     return
   }
 
-  mutateSession(sid, queue => {
-    for (const entry of queue) {
-      revokeAttachmentPreviewUrls(entry.attachments)
-    }
+  for (const entry of queueFor(sid)) {
+    revokeAttachmentPreviewUrls(entry.attachments)
+  }
 
-    return []
-  })
+  writeSession(sid, [])
 }
 
 /**
@@ -412,18 +388,18 @@ export const migrateQueuedPrompts = (fromKey: string | null | undefined, toKey: 
     return false
   }
 
-  // Both queues come from the live persisted map (see mutateSession) so the
-  // migration can't clobber entries another window queued meanwhile.
-  const live = current()
-  const pending = live[from] ?? []
+  const pending = queueFor(from)
 
   if (pending.length === 0) {
     return false
   }
 
+  // Merge over the live persisted map (see writeSession) so the migration can't
+  // clobber entries another window queued meanwhile — including into `to`.
+  const live = load()
   const next: QueueState = { ...live }
   delete next[from]
-  next[to] = [...(live[to] ?? []), ...pending]
+  next[to] = [...(live[to] ?? queueFor(to)), ...pending]
 
   $queuedPromptsBySession.set(next)
   save(next)

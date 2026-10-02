@@ -345,13 +345,27 @@ export const estimateRows = (text: string, w: number, compact = false) => {
 
 /**
  * Render an unanswered clarify prompt (timed out, or cancelled with Esc/Ctrl+C)
- * as a persistent transcript block.  Every question on its own line, answered
- * ones keeping their locked answer (partials survive a timeout server-side, so
- * the record must show what was actually sent).  `reason` states why the
- * prompt ended ("timed out", "cancelled").
+ * as a persistent transcript block.  The live `ClarifyPrompt` overlay is torn
+ * down the moment the turn settles, so without this the question + options
+ * vanish from the screen while the agent's follow-up still refers to "the
+ * options above".  Mirrors the option formatting in ClarifyPrompt (the same
+ * 1-based numbered list) so the persisted record reads identically to what was
+ * on screen.  `reason` states why the prompt ended ("timed out", "cancelled").
  */
-export const formatAbandonedClarify = (
-  questions: { multiSelect?: boolean; qid: string; question: string }[],
+export const formatAbandonedClarify = (question: string, choices: string[] | null, reason: string) => {
+  const head = t('libText.text.clarifyHead', question.trim())
+  const opts = (choices ?? []).map((c, i) => `  ${i + 1}. ${c}`)
+
+  return [head, ...opts, `  ${t('libText.text.clarifyNoSelection', reason)}`].join('\n')
+}
+
+/**
+ * Batch counterpart of `formatAbandonedClarify`: every question on its own
+ * line, answered ones keeping their locked answer (partials survive a
+ * timeout server-side, so the record must show what was actually sent).
+ */
+export const formatAbandonedClarifyBatch = (
+  questions: { qid: string; question: string }[],
   answers: Record<string, string>,
   reason: string
 ) => {
@@ -359,25 +373,15 @@ export const formatAbandonedClarify = (
     const answer = answers[q.qid]
 
     return answer
-      ? `  ${t('libText.text.clarifyAnswered', q.question, clarifyAnswerText(answer, q.multiSelect))}`
+      ? `  ${t('libText.text.clarifyAnswered', q.question, answer)}`
       : `  ${t('libText.text.clarifyUnanswered', q.question)}`
   })
 
   return [
-    t('libText.text.clarifyHead', questions.length),
+    t('libText.text.clarifyBatchHead', questions.length),
     ...lines,
-    `  ${t('libText.text.clarifyReason', reason)}`
+    `  ${t('libText.text.clarifyBatchReason', reason)}`
   ].join('\n')
-}
-
-const clarifyAnswerItems = (answer: string): null | string[] => {
-  try {
-    const parsed: unknown = JSON.parse(answer)
-
-    return Array.isArray(parsed) ? parsed.map(String) : null
-  } catch {
-    return null
-  }
 }
 
 /**
@@ -387,36 +391,21 @@ const clarifyAnswerItems = (answer: string): null | string[] => {
  * the Other row (index = choices.length) with the text staged for editing.
  * Unanswered questions restore to a clean cursor.
  */
-export const clarifyRevisitState = (
+export const clarifyBatchRevisitState = (
   choices: readonly string[],
-  answer: string | undefined,
-  multiSelect = false
-): { custom: string; picked: string[]; sel: number } => {
+  answer: string | undefined
+): { custom: string; sel: number } => {
   if (answer === undefined || answer === '') {
-    return { custom: '', picked: [], sel: 0 }
-  }
-
-  const items = multiSelect ? clarifyAnswerItems(answer) : null
-
-  if (items) {
-    const custom = items.filter(item => !choices.includes(item)).join(', ')
-
-    return { custom, picked: items.filter(item => choices.includes(item)), sel: custom ? choices.length : 0 }
+    return { custom: '', sel: 0 }
   }
 
   const choiceIndex = choices.indexOf(answer)
 
   if (choiceIndex >= 0) {
-    return { custom: '', picked: [], sel: choiceIndex }
+    return { custom: '', sel: choiceIndex }
   }
 
-  return { custom: answer, picked: [], sel: choices.length > 0 ? choices.length : 0 }
-}
-
-export const clarifyAnswerText = (answer: string, multiSelect?: boolean) => {
-  const items = multiSelect ? clarifyAnswerItems(answer) : null
-
-  return items ? items.join(', ') : answer
+  return { custom: answer, sel: choices.length > 0 ? choices.length : 0 }
 }
 
 export const flat = (r: Record<string, string[]>) => Object.values(r).flat()

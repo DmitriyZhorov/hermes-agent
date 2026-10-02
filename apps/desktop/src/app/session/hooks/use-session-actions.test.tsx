@@ -9,8 +9,7 @@ import { PRIMARY_SESSION_VIEW } from '@/app/chat/session-view'
 import { NO_PROJECT_ID } from '@/app/chat/sidebar/projects/workspace-groups'
 import { resolveSessionRpcOwner } from '@/app/contrib/wiring-routing'
 import { $terminalTakeover, setTerminalTakeover } from '@/app/right-sidebar/store'
-import { group } from '@/components/pane-shell/tree/model'
-import { $activeTreeGroup, $layoutTree, noteActiveTreeGroup, revealTreePane } from '@/components/pane-shell/tree/store'
+import { noteActiveTreeGroup, revealTreePane } from '@/components/pane-shell/tree/store'
 import {
   deleteSession,
   getAllSessionMessages,
@@ -51,7 +50,6 @@ import {
   $currentModel,
   $currentProvider,
   $currentReasoningEffort,
-  $freshDraftKey,
   $messages,
   $messagingSessions,
   $newChatWorkspaceTarget,
@@ -109,7 +107,6 @@ import { NEW_CHAT_ROUTE, sessionRoute } from '../../routes'
 import type { ClientSessionState } from '../../types'
 
 import { applySessionInfoStatePatch, sessionInfoStatePatch } from './use-message-stream/utils'
-import { captureSteeringSession } from './use-prompt-actions/steering-session'
 import { useSessionActions } from './use-session-actions'
 import { suppressTranscriptForView, transcriptRowContentKey } from './use-session-actions/transcript-provenance'
 import type { TranscriptViewCutoff } from './use-session-actions/transcript-provenance'
@@ -577,51 +574,12 @@ function StoredIdRotationHarness({
   return null
 }
 
-function StoredIdRotationProducerHarness({
-  getRoutedStoredSessionId,
-  navigate,
-  onCache
-}: {
-  getRoutedStoredSessionId: () => null | string
-  navigate: (to: string, options?: { replace?: boolean }) => void
-  onCache: (cache: ReturnType<typeof useSessionStateCache>) => void
-}) {
-  const activeSessionId = useStore($activeSessionId)
-  const selectedStoredSessionId = useStore($selectedStoredSessionId)
-  const busyRef = useRef(false)
-
-  const cache = useSessionStateCache({
-    activeSessionId,
-    busyRef,
-    selectedStoredSessionId,
-    setAwaitingResponse,
-    setBusy,
-    setMessages
-  })
-
-  onCache(cache)
-
-  return (
-    <StoredIdRotationHarness
-      activeSessionIdRef={cache.activeSessionIdRef}
-      getRoutedStoredSessionId={getRoutedStoredSessionId}
-      navigate={navigate}
-      selectedStoredSessionIdRef={cache.selectedStoredSessionIdRef}
-    />
-  )
-}
-
 describe('active stored-session id rotation routing', () => {
   afterEach(() => {
     cleanup()
     setActiveSessionId(null)
     setActiveSessionStoredIdRotation(null)
     setSelectedStoredSessionId(null)
-    setSessions([])
-    $sessionTiles.set([])
-    $layoutTree.set(null)
-    $activeTreeGroup.set(null)
-    window.history.pushState({}, '', '/')
     vi.restoreAllMocks()
   })
 
@@ -681,127 +639,6 @@ describe('active stored-session id rotation routing', () => {
     expect($sessionTiles.get()).toEqual([])
 
     clearAllSessionStates()
-  })
-
-  it('follows a proven rotation when its unloaded successor already has focus', async () => {
-    const previousId = 'stored-A'
-    const nextId = 'stored-A-next'
-    const runtimeId = 'runtime-A'
-    const navigate = vi.fn()
-    let cache: ReturnType<typeof useSessionStateCache> | undefined
-
-    setSessions([])
-    setSelectedStoredSessionId(previousId)
-    setActiveSessionId(runtimeId)
-    window.history.pushState({}, '', `/#/${previousId}`)
-
-    render(
-      <StoredIdRotationProducerHarness
-        getRoutedStoredSessionId={() => previousId}
-        navigate={navigate}
-        onCache={value => {
-          cache = value
-        }}
-      />
-    )
-
-    expect(cache).toBeDefined()
-
-    act(() => {
-      // The real cache emits the rotation while the previous session still
-      // owns focus, then the successor tile takes focus before React runs the
-      // route-follow effect. The refreshed row is still missing at that point.
-      cache!.updateSessionState(runtimeId, state => state, previousId)
-      cache!.updateSessionState(runtimeId, state => state, nextId)
-      setSessions([])
-      $sessionTiles.set([{ storedSessionId: nextId } as never])
-      $layoutTree.set(
-        group(['workspace', `session-tile:${nextId}`], {
-          active: `session-tile:${nextId}`,
-          id: 'grp-main'
-        })
-      )
-      $activeTreeGroup.set('grp-main')
-    })
-
-    await waitFor(() => expect($selectedStoredSessionId.get()).toBe(nextId))
-    expect(navigate).toHaveBeenCalledWith(sessionRoute(nextId), { replace: true })
-    expect($activeSessionStoredIdRotation.get()).toBeNull()
-  })
-
-  it('keeps rotation proof for steering when focus moves to an unrelated tile', async () => {
-    const previousId = 'stored-A'
-    const nextId = 'stored-A-next'
-    const unrelatedId = 'stored-C'
-    const runtimeId = 'runtime-A'
-    const navigate = vi.fn()
-    let cache: ReturnType<typeof useSessionStateCache> | undefined
-
-    setSessions([])
-    setSelectedStoredSessionId(previousId)
-    setActiveSessionId(runtimeId)
-    window.history.pushState({}, '', `/#/${previousId}`)
-
-    render(
-      <StoredIdRotationProducerHarness
-        getRoutedStoredSessionId={() => previousId}
-        navigate={navigate}
-        onCache={value => {
-          cache = value
-        }}
-      />
-    )
-
-    act(() => {
-      cache!.updateSessionState(runtimeId, state => state, previousId)
-      cache!.updateSessionState(runtimeId, state => state, nextId)
-      setSessions([])
-      $sessionTiles.set([{ storedSessionId: unrelatedId } as never])
-      $layoutTree.set(
-        group(['workspace', `session-tile:${unrelatedId}`], {
-          active: `session-tile:${unrelatedId}`,
-          id: 'grp-main'
-        })
-      )
-      $activeTreeGroup.set('grp-main')
-    })
-
-    await waitFor(() =>
-      expect($activeSessionStoredIdRotation.get()).toEqual({
-        nextStoredSessionId: nextId,
-        previousStoredSessionId: previousId,
-        runtimeSessionId: runtimeId
-      })
-    )
-    expect($selectedStoredSessionId.get()).toBe(previousId)
-    expect(navigate).not.toHaveBeenCalled()
-
-    const captured = captureSteeringSession({
-      activeSessionIdRef: cache!.activeSessionIdRef,
-      getRoutedStoredSessionId: () => previousId,
-      requestGateway: async () => ({}) as never,
-      runtimeIdByStoredSessionIdRef: cache!.runtimeIdByStoredSessionIdRef,
-      selectedStoredSessionIdRef: cache!.selectedStoredSessionIdRef,
-      updateSessionState: cache!.updateSessionState
-    })
-
-    expect(captured?.sessionId).toBe(runtimeId)
-    expect(captured?.storedSessionId).toBe(nextId)
-
-    act(() => {
-      $sessionTiles.set([{ storedSessionId: nextId } as never])
-      $layoutTree.set(
-        group(['workspace', `session-tile:${nextId}`], {
-          active: `session-tile:${nextId}`,
-          id: 'grp-main'
-        })
-      )
-      $activeTreeGroup.set('grp-main')
-    })
-
-    await waitFor(() => expect($selectedStoredSessionId.get()).toBe(nextId))
-    expect($activeSessionStoredIdRotation.get()).toBeNull()
-    expect(navigate).toHaveBeenCalledWith(sessionRoute(nextId), { replace: true })
   })
 
   it('keeps draft on the previous tip when the new tip row is not loaded yet', async () => {
@@ -1461,7 +1298,7 @@ describe('resumeSession failure recovery', () => {
     const stateMapRef: MutableRefObject<Map<string, ClientSessionState>> = { current: new Map() }
 
     const toolCall = {
-      function: { arguments: '{"questions":[{"question":"Which path?","choices":["safe","fast"]}]}', name: 'clarify' },
+      function: { arguments: '{"question":"Which path?","choices":["safe","fast"]}', name: 'clarify' },
       id: 'call-provider'
     }
 
@@ -1480,7 +1317,9 @@ describe('resumeSession failure recovery', () => {
         // the caller sees the result; that handler parks the card. Mirror that
         // ordering here (no channel in this harness).
         setClarifyRequest({
-          questions: [{ choices: ['safe', 'fast'], multiSelect: false, qid: 'q0', question: 'Which path?' }],
+          choices: ['safe', 'fast'],
+          multiSelect: false,
+          question: 'Which path?',
           receivedAt: Date.now(),
           requestId: 'req-resumed',
           sessionId: 'runtime-1'
@@ -1492,11 +1331,7 @@ describe('resumeSession failure recovery', () => {
           messages: [],
           messages_omitted: true,
           open_requests: [
-            {
-              id: 'req-resumed',
-              method: 'clarify',
-              params: { questions: [{ choices: ['safe', 'fast'], qid: 'q0', question: 'Which path?' }] }
-            }
+            { id: 'req-resumed', method: 'clarify', params: { choices: ['safe', 'fast'], question: 'Which path?' } }
           ],
           resumed: 'stored-1',
           running: true,
@@ -1520,10 +1355,7 @@ describe('resumeSession failure recovery', () => {
     expect(clarifyMessages).toHaveLength(1)
     expect(clarifyMessages[0].pending).toBe(true)
     expect(state?.streamId).toBe(clarifyMessages[0].id)
-    expect($clarifyRequests.get()['runtime-1']).toMatchObject({
-      requestId: 'req-resumed',
-      questions: [{ question: 'Which path?' }]
-    })
+    expect($clarifyRequests.get()['runtime-1']).toMatchObject({ requestId: 'req-resumed', question: 'Which path?' })
   })
 
   it('restores a pending batch clarify whose resume snapshot has no top-level question', async () => {
@@ -1561,7 +1393,10 @@ describe('resumeSession failure recovery', () => {
         // Request handler parks the batch card (with the server-locked answer)
         // from the re-delivered open request before the result lands.
         setClarifyRequest({
+          choices: null,
           lockedAnswers: { q0: 'Blue' },
+          multiSelect: false,
+          question: '',
           questions: questions.map(q => ({ ...q, multiSelect: false })),
           receivedAt: Date.now(),
           requestId: 'req-batch-resumed',
@@ -1592,6 +1427,7 @@ describe('resumeSession failure recovery', () => {
     const request = $clarifyRequests.get()['runtime-1']
     expect(request).toMatchObject({
       lockedAnswers: { q0: 'Blue' },
+      question: '',
       requestId: 'req-batch-resumed'
     })
     expect(request.questions).toHaveLength(2)
@@ -3704,8 +3540,8 @@ describe('resumeSession warm-cache mapping integrity', () => {
             type: 'tool-call',
             toolCallId: 'call-provider',
             toolName: 'clarify',
-            args: { questions: [{ choices: ['safe', 'fast'], question: 'Which path?' }] },
-            argsText: '{"questions":[{"question":"Which path?","choices":["safe","fast"]}]}'
+            args: { choices: ['safe', 'fast'], question: 'Which path?' },
+            argsText: '{"question":"Which path?","choices":["safe","fast"]}'
           }
         ]
       }
@@ -3725,7 +3561,7 @@ describe('resumeSession warm-cache mapping integrity', () => {
           tool_calls: [
             {
               function: {
-                arguments: '{"questions":[{"question":"Which path?","choices":["safe","fast"]}]}',
+                arguments: '{"question":"Which path?","choices":["safe","fast"]}',
                 name: 'clarify'
               },
               id: 'call-provider'
@@ -3739,7 +3575,9 @@ describe('resumeSession warm-cache mapping integrity', () => {
     const requestGateway = vi.fn(async (method: string) => {
       if (method === 'session.activate') {
         setClarifyRequest({
-          questions: [{ choices: ['safe', 'fast'], multiSelect: false, qid: 'q0', question: 'Which path?' }],
+          choices: ['safe', 'fast'],
+          multiSelect: false,
+          question: 'Which path?',
           receivedAt: Date.now(),
           requestId: 'req-warm',
           sessionId: 'rt-A'
@@ -3751,11 +3589,7 @@ describe('resumeSession warm-cache mapping integrity', () => {
           messages: [],
           messages_omitted: true,
           open_requests: [
-            {
-              id: 'req-warm',
-              method: 'clarify',
-              params: { questions: [{ choices: ['safe', 'fast'], qid: 'q0', question: 'Which path?' }] }
-            }
+            { id: 'req-warm', method: 'clarify', params: { choices: ['safe', 'fast'], question: 'Which path?' } }
           ],
           resumed: 'stored-A',
           running: true,
@@ -3840,7 +3674,9 @@ describe('resumeSession warm-cache mapping integrity', () => {
     const requestGateway = vi.fn(async (method: string) => {
       if (method === 'session.activate') {
         setClarifyRequest({
-          questions: [{ choices: ['safe', 'fast'], multiSelect: false, qid: 'q0', question: 'Which path?' }],
+          choices: ['safe', 'fast'],
+          multiSelect: false,
+          question: 'Which path?',
           receivedAt: Date.now(),
           requestId: 'req-navigation',
           sessionId: 'rt-A'
@@ -3852,11 +3688,7 @@ describe('resumeSession warm-cache mapping integrity', () => {
           messages: [],
           messages_omitted: true,
           open_requests: [
-            {
-              id: 'req-navigation',
-              method: 'clarify',
-              params: { questions: [{ choices: ['safe', 'fast'], qid: 'q0', question: 'Which path?' }] }
-            }
+            { id: 'req-navigation', method: 'clarify', params: { choices: ['safe', 'fast'], question: 'Which path?' } }
           ],
           resumed: 'stored-A',
           running: true,
@@ -3907,7 +3739,7 @@ describe('resumeSession warm-cache mapping integrity', () => {
     expect(answerable[0].parts).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          args: expect.objectContaining({ questions: [{ choices: ['safe', 'fast'], question: 'Which path?' }] }),
+          args: expect.objectContaining({ choices: ['safe', 'fast'], question: 'Which path?' }),
           toolCallId: 'req-navigation',
           toolName: 'clarify',
           type: 'tool-call'
@@ -3986,8 +3818,8 @@ describe('resumeSession warm-cache mapping integrity', () => {
             type: 'tool-call',
             toolCallId: 'call-provider',
             toolName: 'clarify',
-            args: { questions: [{ choices: ['safe', 'fast'], question: 'Which path?' }] },
-            argsText: '{"questions":[{"question":"Which path?","choices":["safe","fast"]}]}'
+            args: { choices: ['safe', 'fast'], question: 'Which path?' },
+            argsText: '{"question":"Which path?","choices":["safe","fast"]}'
           }
         ]
       }
@@ -3999,7 +3831,9 @@ describe('resumeSession warm-cache mapping integrity', () => {
 
     if (keepStore) {
       setClarifyRequest({
-        questions: [{ choices: ['safe', 'fast'], multiSelect: false, qid: 'q0', question: 'Which path?' }],
+        choices: ['safe', 'fast'],
+        multiSelect: false,
+        question: 'Which path?',
         requestId: 'req-stale',
         sessionId: 'rt-A'
       })
@@ -4015,7 +3849,7 @@ describe('resumeSession warm-cache mapping integrity', () => {
           tool_calls: [
             {
               function: {
-                arguments: '{"questions":[{"question":"Which path?","choices":["safe","fast"]}]}',
+                arguments: '{"question":"Which path?","choices":["safe","fast"]}',
                 name: 'clarify'
               },
               id: 'call-provider'
@@ -4098,7 +3932,9 @@ describe('resumeSession warm-cache mapping integrity', () => {
     await waitFor(() => expect(requestGateway).toHaveBeenCalledWith('session.activate', expect.anything()))
 
     setClarifyRequest({
-      questions: [{ choices: ['new'], multiSelect: false, qid: 'q0', question: 'New question?' }],
+      choices: ['new'],
+      multiSelect: false,
+      question: 'New question?',
       receivedAt: Date.now() / 1000 + 60,
       requestId: 'req-newer',
       sessionId: 'rt-A'
@@ -6115,17 +5951,5 @@ describe('routed fresh chat keeps its exact owner across turns', () => {
     expect(vi.mocked(requestGatewayForAgent).mock.calls.filter(call => call[2] === 'session.close')).toEqual([])
     expect(ambientRequest).not.toHaveBeenCalledWith('session.close', expect.anything())
     expect(getSessionOwnerHint(STORED)).toEqual(route)
-  })
-
-  it('can preserve the current fresh draft key when explicitly requested', async () => {
-    let handle: HarnessHandle | null = null
-    const requestGateway = vi.fn(async () => ({} as never))
-
-    render(<Harness onReady={h => (handle = h)} requestGateway={requestGateway} />)
-    await waitFor(() => expect(handle).not.toBeNull())
-
-    const before = $freshDraftKey.get()
-    await handle!.startFreshSessionDraft({ replaceRoute: true, rotateFreshDraftKey: false })
-    expect($freshDraftKey.get()).toBe(before)
   })
 })

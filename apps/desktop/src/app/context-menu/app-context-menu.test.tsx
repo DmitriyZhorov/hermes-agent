@@ -413,7 +413,6 @@ describe('AppContextMenu', () => {
     const unregister = registerTerminalContextMenu(host.querySelector('[data-terminal]')!, {
       getSelection: () => 'picked text',
       paste,
-      reload: vi.fn(),
       selectAll: vi.fn()
     })
 
@@ -433,7 +432,6 @@ describe('AppContextMenu', () => {
     const unregister = registerTerminalContextMenu(host.querySelector('[data-terminal]')!, {
       getSelection: () => '',
       paste: null,
-      reload: vi.fn(),
       selectAll: vi.fn()
     })
 

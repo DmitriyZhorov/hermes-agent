@@ -6,12 +6,12 @@ import { resetBrowseState } from '@/store/composer-input-history'
 import {
   $parkedQueueSessions,
   $queuedPromptsBySession,
+  getQueuedPrompts,
   MAX_AUTO_DRAIN_ATTEMPTS,
   noteQueuedPromptDrainFailure,
   type QueuedPromptEntry,
   removeQueuedPrompt,
-  shouldAutoDrain,
-  withQueueDrainClaim
+  shouldAutoDrain
 } from '@/store/composer-queue'
 import { notify } from '@/store/notifications'
 import {
@@ -164,35 +164,36 @@ export function useBackgroundQueueDrain({
         scheduleRetry()
       }
 
-      void withQueueDrainClaim(sessionKey, async queue => {
-        const liveEntry = queue.find(candidate => candidate.id === entry.id)
+      void Promise.resolve()
+        .then(async () => {
+          const liveEntry = getQueuedPrompts(sessionKey).find(candidate => candidate.id === entry.id)
 
-        if (!liveEntry) {
+          if (!liveEntry) {
+            return true
+          }
+
+          const runtimeSessionId = runtimeIdByStoredSessionIdRef.current.get(sessionKey) ?? null
+
+          const accepted = await Promise.resolve(
+            submitTextRef.current(liveEntry.text, {
+              attachments: liveEntry.attachments,
+              fromQueue: true,
+              sessionId: runtimeSessionId,
+              storedSessionId: sessionKey
+            })
+          )
+
+          if (accepted === false) {
+            return false
+          }
+
+          drainFailuresRef.current.delete(liveEntry.id)
+          // Submit owns blob: previews after a successful drain handoff.
+          removeQueuedPrompt(sessionKey, liveEntry.id, { retainPreviewUrls: true })
+          resetBrowseState(runtimeSessionId)
+
           return true
-        }
-
-        const runtimeSessionId = runtimeIdByStoredSessionIdRef.current.get(sessionKey) ?? null
-
-        const accepted = await Promise.resolve(
-          submitTextRef.current(liveEntry.text, {
-            attachments: liveEntry.attachments,
-            fromQueue: true,
-            sessionId: runtimeSessionId,
-            storedSessionId: sessionKey
-          })
-        )
-
-        if (accepted === false) {
-          return false
-        }
-
-        drainFailuresRef.current.delete(liveEntry.id)
-        // Submit owns blob: previews after a successful drain handoff.
-        removeQueuedPrompt(sessionKey, liveEntry.id, { retainPreviewUrls: true })
-        resetBrowseState(runtimeSessionId)
-
-        return true
-      })
+        })
         .then(accepted => {
           if (!accepted) {
             onFail()

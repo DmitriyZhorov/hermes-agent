@@ -1152,7 +1152,8 @@ class TestMultiplexProfileWebhookAuthentication:
             "X-Hub-Signature-256": _github_signature(body, route_secret),
         }
         with (
-            patch.object(sc_mod, "_skill_commands_by_key", {}),
+            patch.object(sc_mod, "_skill_commands", {}),
+            patch.object(sc_mod, "_skill_commands_home", None),
         ):
             async with TestClient(TestServer(self._app(adapter))) as cli:
                 resp = await cli.post("/p/worker/webhooks/gh", data=body, headers=headers)

@@ -70,7 +70,7 @@ test('extreme percentages clamp to the level bounds', () => {
   assert.equal(percentToZoomLevel(1_000_000), 9)
 })
 
-test('installZoomReassertOnWindowEvents wires Windows maximize transitions in addition to normal lifecycle events', () => {
+test('installZoomReassertOnWindowEvents wires show, restore, focus, resize, and cross-display moves on macOS and Windows', () => {
   const handlers = new Map()
 
   const win = {
@@ -93,15 +93,9 @@ test('installZoomReassertOnWindowEvents wires Windows maximize transitions in ad
   handlers.get('show')()
   handlers.get('restore')()
   handlers.get('focus')()
-  handlers.get('maximize')()
-  handlers.get('unmaximize')()
   handlers.get('resized')()
   handlers.get('moved')()
-  assert.equal(calls, 7)
-})
-
-test('zoomReassertWindowEvents does not add Windows-only maximize events on macOS', () => {
-  assert.deepEqual(zoomReassertWindowEvents('darwin'), ['show', 'restore', 'focus', 'resized', 'moved'])
+  assert.equal(calls, 5)
 })
 
 test('isDebouncedReassertEvent debounces focus only on Linux, not Windows/macOS', () => {

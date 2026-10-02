@@ -46,9 +46,6 @@ interface CatalogBrowserProps {
   isInstalled: (entry: CatalogEntry) => boolean
   onInstall: (entry: CatalogEntry) => void
   isInstalling?: (entry: CatalogEntry) => boolean
-  /** Feed rows the caller drops from the list entirely (e.g. a community
-   *  lookalike whose name is taken by an installed skill). */
-  isSuperseded?: (entry: CatalogEntry) => boolean
   installedEntries?: CatalogEntry[]
   matchInstalled?: (entry: CatalogEntry) => CatalogEntry | undefined
   actions?: ReactNode
@@ -114,7 +111,6 @@ export const CatalogBrowser = memo(function CatalogBrowser({
   isInstalled,
   onInstall,
   isInstalling,
-  isSuperseded,
   installedEntries,
   matchInstalled,
   actions,
@@ -168,8 +164,7 @@ export const CatalogBrowser = memo(function CatalogBrowser({
   useEffect(() => (CATALOG_POINTER_ENABLED && root.current ? trackCatalogPointer(root.current) : undefined), [])
 
   const entries = mergeInstalled(data ?? [], installedEntries ?? [], matchInstalled)
-  const visible = isSuperseded ? entries.filter(entry => !isSuperseded(entry)) : entries
-  const filtered = sortCatalog(filterCatalog(visible, facets, deferredQuery, isInstalled), sort, kind)
+  const filtered = sortCatalog(filterCatalog(entries, facets, deferredQuery, isInstalled), sort, kind)
 
   const discover =
     kind === 'plugins' && !facets.categories.length && !facets.tags.length && !deferredQuery && !facets.installedOnly
@@ -181,7 +176,7 @@ export const CatalogBrowser = memo(function CatalogBrowser({
 
   const pageOrder = sections.length ? sections.flatMap(section => section.entries) : filtered
 
-  const selected = visible.find(entry => entry.id === selectedId) ?? filtered[0]
+  const selected = entries.find(entry => entry.id === selectedId) ?? filtered[0]
   const related = selected && (!cardView || detailOpen) ? relatedEntries(filtered, selected, 3) : []
 
   const searchFor = (value: string) => {
@@ -268,7 +263,7 @@ export const CatalogBrowser = memo(function CatalogBrowser({
         <SelectValue placeholder={c.sortBy} />
       </SelectTrigger>
       <SelectContent>
-        {catalogSortOptions(visible, kind, sortLabels).map(({ value, label }) => (
+        {catalogSortOptions(entries, kind, sortLabels).map(({ value, label }) => (
           <SelectItem key={value} value={value}>
             {label}
           </SelectItem>
@@ -284,7 +279,7 @@ export const CatalogBrowser = memo(function CatalogBrowser({
     <div className="@container/catalog flex h-full min-h-0 min-w-0" data-catalog={kind} ref={root}>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col @[48rem]/catalog:flex-row">
         <CatalogFilters
-          categories={catalogCategories(visible, kind)}
+          categories={catalogCategories(entries, kind)}
           className="max-h-52 shrink-0 gap-0 pt-3 @[48rem]/catalog:max-h-none @[48rem]/catalog:w-48"
           facets={facets}
           onCategory={filters.toggleCategory}
@@ -295,8 +290,8 @@ export const CatalogBrowser = memo(function CatalogBrowser({
           resultCount={filtered.length}
           sidebarActions={actions && <div className="flex flex-wrap items-center gap-1.5">{actions}</div>}
           sortControl={sortControl}
-          sources={catalogSources(visible)}
-          tags={catalogTags(visible, facets.tags, TAG_LIMIT)}
+          sources={catalogSources(entries)}
+          tags={catalogTags(entries, facets.tags, TAG_LIMIT)}
         />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-catalog-results>
           {/* Search owns the header; kind-specific setup actions and the view toggle share the end slot. */}

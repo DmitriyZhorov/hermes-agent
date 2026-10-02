@@ -429,11 +429,7 @@ describe('$activeSessionAwaitingInput', () => {
     clearApprovalRequest('s1')
     expect($activeSessionAwaitingInput.get()).toBe(false)
 
-    setClarifyRequest({
-      questions: [{ choices: null, multiSelect: false, qid: 'q0', question: 'q' }],
-      requestId: 'c1',
-      sessionId: 's1'
-    })
+    setClarifyRequest({ choices: null, multiSelect: false, question: 'q', requestId: 'c1', sessionId: 's1' })
     expect($activeSessionAwaitingInput.get()).toBe(true)
   })
 

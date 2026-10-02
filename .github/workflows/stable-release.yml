@@ -17,13 +17,6 @@ on:
 permissions:
   contents: read
 
-# Every reusable workflow called below inherits secrets (`secrets: inherit`)
-# because their release-signing jobs need protected-environment secrets. A
-# called workflow only sees them when the caller inherits AND the called job
-# declares the environment: the job-level `environment:` alone attaches the
-# deployment and exposes `vars`, but leaves `secrets.*` empty
-# (actions/runner#1490). ci.yaml is deliberately excluded — it runs
-# PR-controlled code and must stay secret-free.
 concurrency:
   group: stable-release
   cancel-in-progress: false
@@ -83,7 +76,6 @@ jobs:
     if: >-
       !cancelled() && needs.admit.result == 'success'
     uses: ./.github/workflows/docker.yml
-    secrets: inherit
     with:
       release-phase: test
       skip-tests: ${{ needs.admit.outputs.skip-tests == 'true' }}
@@ -117,7 +109,6 @@ jobs:
       contents: read
       actions: read
     uses: ./.github/workflows/termux-verify.yml
-    secrets: inherit
     with:
       release: true
 
@@ -154,7 +145,6 @@ jobs:
       packages: write
       id-token: write
     uses: ./.github/workflows/desktop-bundled-release.yml
-    secrets: inherit
     with:
       tag: ${{ needs.admit.outputs.tag }}
       claim-tag: ${{ needs.admit.outputs.claim-tag }}
@@ -175,7 +165,6 @@ jobs:
       packages: write
       id-token: write
     uses: ./.github/workflows/desktop-bundled-release.yml
-    secrets: inherit
     with:
       tag: ${{ needs.admit.outputs.tag }}
       claim-tag: ${{ needs.admit.outputs.claim-tag }}
@@ -196,7 +185,6 @@ jobs:
       packages: write
       id-token: write
     uses: ./.github/workflows/desktop-bundled-release.yml
-    secrets: inherit
     with:
       tag: ${{ needs.admit.outputs.tag }}
       claim-tag: ${{ needs.admit.outputs.claim-tag }}
@@ -217,7 +205,6 @@ jobs:
       packages: write
       id-token: write
     uses: ./.github/workflows/desktop-bundled-release.yml
-    secrets: inherit
     with:
       tag: ${{ needs.admit.outputs.tag }}
       claim-tag: ${{ needs.admit.outputs.claim-tag }}
@@ -240,7 +227,6 @@ jobs:
       packages: write
       id-token: write
     uses: ./.github/workflows/desktop-bundled-release.yml
-    secrets: inherit
     with:
       tag: ${{ needs.admit.outputs.tag }}
       claim-tag: ${{ needs.admit.outputs.claim-tag }}
@@ -261,7 +247,6 @@ jobs:
       packages: write
       id-token: write
     uses: ./.github/workflows/desktop-bundled-release.yml
-    secrets: inherit
     with:
       tag: ${{ needs.admit.outputs.tag }}
       claim-tag: ${{ needs.admit.outputs.claim-tag }}
@@ -520,7 +505,6 @@ jobs:
     # stable/latest aliases move in the ordered publication pass.
     needs: [admit, docker]
     uses: ./.github/workflows/docker.yml
-    secrets: inherit
     with:
       release-phase: publish
       tag: ${{ needs.admit.outputs.tag }}
@@ -536,7 +520,6 @@ jobs:
       packages: write
       id-token: write
     uses: ./.github/workflows/desktop-bundled-release.yml
-    secrets: inherit
     with:
       tag: ${{ needs.admit.outputs.tag }}
       claim-tag: ${{ needs.admit.outputs.claim-tag }}

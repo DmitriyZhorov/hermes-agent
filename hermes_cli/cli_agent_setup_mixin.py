@@ -12,7 +12,7 @@ from agent.i18n import t
 from utils import base_url_host_matches
 
 
-def _single_query_clarify_callback(questions: list) -> dict:
+def _single_query_clarify_callback(question: str, choices=None, multi_select=False) -> str:
     """Headless clarify answer for ``hermes chat -q``.
 
     A -q turn never builds the prompt_toolkit app, so the interactive clarify modal
@@ -23,9 +23,11 @@ def _single_query_clarify_callback(questions: list) -> dict:
     The oneshot path answers immediately via ``_oneshot_clarify_callback``; single-query turns need the same
     headless behavior (#94943).
     """
-    return {"answers": {}, "outcome": "undelivered", "notice": (
-        "single-query mode: no user available to answer. Pick the best choices using your own "
-        "judgment, or make the most reasonable assumption you can, and continue.")}
+    prefix = f"[single-query mode: no user available to answer {question!r}. "
+    if choices:
+        what = "subset" if multi_select else "option"
+        return f"{prefix}Pick the best {what} from {choices} using your own judgment and continue.]"
+    return f"{prefix}Make the most reasonable assumption you can and continue.]"
 
 
 def _current_runtime(cli) -> dict:
@@ -523,18 +525,16 @@ class CLIAgentSetupMixin:
 
     def _resolve_turn_agent_config(self, user_message: str) -> dict:
         """Effective model/runtime config for one turn — always the session's primary
-        provider. With a static `/fast` tier (fast / ultrafast) attach request_overrides;
+        provider. With `/fast` on (service_tier == "priority") attach request_overrides;
         auto/cold tiers are applied per request by agent.fast_mode instead."""
-        from agent.fast_mode import STATIC_TIERS
         from hermes_cli.models import resolve_fast_mode_overrides
         runtime = _current_runtime(self)
         route = {"model": self.model, "runtime": runtime, "signature": _route_signature(self.model, runtime)}
         overrides = None
-        tier = getattr(self, "service_tier", None)
-        if tier in STATIC_TIERS:
+        if getattr(self, "service_tier", None) == "priority":
             try:
                 overrides = resolve_fast_mode_overrides(
-                    route["model"], provider=runtime["provider"], base_url=runtime["base_url"], tier=tier)
+                    route["model"], provider=runtime["provider"], base_url=runtime["base_url"])
             except Exception:
                 pass
         route["request_overrides"] = overrides

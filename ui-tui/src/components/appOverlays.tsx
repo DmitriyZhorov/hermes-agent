@@ -59,7 +59,7 @@ function PromptCell({ children, cols, id }: { children: ReactNode; cols: number;
 export function PromptZone({
   cols,
   onApprovalChoice,
-  onClarifyCancel,
+  onClarifyAnswer,
   onClarifyQuestionAnswer,
   onSecretSubmit,
   onSudoSubmit,
@@ -68,7 +68,7 @@ export function PromptZone({
   AppOverlaysProps,
   | 'cols'
   | 'onApprovalChoice'
-  | 'onClarifyCancel'
+  | 'onClarifyAnswer'
   | 'onClarifyQuestionAnswer'
   | 'onSecretSubmit'
   | 'onSudoSubmit'
@@ -147,7 +147,8 @@ export function PromptZone({
       <PromptCell cols={cols} id="clarify">
         <ClarifyPrompt
           cols={cols}
-          onCancel={onClarifyCancel}
+          onAnswer={onClarifyAnswer}
+          onCancel={() => onClarifyAnswer('')}
           onQuestionAnswer={onClarifyQuestionAnswer}
           req={overlay.clarify}
           t={theme}
