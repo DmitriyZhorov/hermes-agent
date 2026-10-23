@@ -35,6 +35,12 @@ import hermes_yaml as yaml
 
 from hermes_cli.cli_output import line_input
 from hermes_cli.colors import Colors, color
+from hermes_cli.config_key_path import (
+    _greedy_literal_match,
+    _phantom_sibling,
+    _split_key_path,
+    escape_free_form_key_tail,
+)
 from hermes_cli import managed_scope
 from hermes_cli.default_soul import DEFAULT_SOUL_MD, is_legacy_template_soul
 from hermes_cli.secret_prompt import masked_secret_prompt
@@ -640,64 +646,6 @@ def get_missing_env_vars(required_only: bool = False) -> list[dict[str, Any]]:
         if not get_env_value(var_name)]
 
 
-def _split_key_path(key: str) -> list[str]:
-    """Split a dotted config-key path, honoring backslash-escaped dots (``a\\.b`` -> ``a.b``).
-    Backslashes before any other character are preserved verbatim.
-
-    ``hermes config set`` uses ``.`` as the nesting separator, so a key that itself contains a literal dot
-    (e.g. provider names like ``qwen3.5-397b-wafer``) was silently split into bogus nested segments
-    (#84064).
-    """
-    parts: list[str] = []
-    current: list[str] = []
-    i = 0
-    while i < len(key):
-        ch = key[i]
-        if ch == "\\" and key[i + 1:i + 2] == ".":
-            current.append(".")
-            i += 2
-            continue
-        if ch == ".":
-            parts.append("".join(current))
-            current = []
-        else:
-            current.append(ch)
-        i += 1
-    parts.append("".join(current))
-    return parts
-
-
-def _greedy_literal_match(container: dict, parts: list) -> Optional[tuple[str, int]]:
-    """Return ``(literal_key, n_consumed)`` for the longest dotted literal key present in
-    *container*, or None. With no multi-segment literal this is the historic plain-split walk.
-
-    Dots in config key names are the norm, not the exception — model IDs (``grok-4.6``, ``glm-5.3``), Matrix
-    room IDs (``!room:chat.example.cc``), and versioned provider names all embed dots. Users typing
-    ``providers.myprov.models.grok-4.6.context_length`` do not know the escape syntax exists, so when
-    navigating an EXISTING mapping we prefer an existing literal key equal to the dot-join of the next N
-    path segments (longest match wins) over blindly splitting. See #84064 / #80006 / 91095 / #91607 /
-    #99124.
-    """
-    if not isinstance(container, dict) or not parts:
-        return None
-    return next(
-        ((".".join(parts[:n]), n) for n in range(len(parts), 0, -1) if ".".join(parts[:n]) in container),
-        None)
-
-
-def _phantom_sibling(container: dict, part: str) -> Optional[str]:
-    """Existing literal dotted key that creating an intermediate mapping ``part`` would shadow
-    (``grok-4`` beside ``grok-4.5``) — the write would produce a phantom sibling the runtime never
-    reads, so callers fail loudly instead.
-
-    Called when a write is about to CREATE a new intermediate mapping named ``part``. See #84064.
-    """
-    if not isinstance(container, dict):
-        return None
-    prefix = part + "."
-    return next((k for k in container if isinstance(k, str) and k.startswith(prefix)), None)
-
-
 def _set_nested(config, dotted_key: str, value):
     """Set a value at a dotted key path, creating intermediate dicts on demand.
     Numeric segments index lists; the index must already exist (lists are never grown).
@@ -710,8 +658,10 @@ def _set_nested(config, dotted_key: str, value):
     so ``models.grok-4.6.supports_vision`` lands on the real ``grok-4.6`` entry. And when a write WOULD
     create a new intermediate mapping that shadows an existing dotted sibling (``grok-4`` beside
     ``grok-4.5``), it raises ``ValueError`` instead of silently writing a phantom the runtime never reads.
+    A dotted key inside a flat free-form section (``compression.model_thresholds.z-ai/glm-5.3``) is
+    escaped up front (see ``escape_free_form_key_tail``) so the first write lands on the real entry.
     """
-    parts = _split_key_path(dotted_key)
+    parts = _split_key_path(escape_free_form_key_tail(dotted_key))
     current = config
     i = 0
     while i < len(parts):

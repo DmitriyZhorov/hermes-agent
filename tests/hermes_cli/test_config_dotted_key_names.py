@@ -308,6 +308,77 @@ class TestDottedLeafKeys:
 # split exactly as before.
 # ---------------------------------------------------------------------------
 
+class TestFlatFreeFormSections:
+    """A dotted key inside a FLAT free-form section is written literally on the first attempt.
+
+    DEFAULT_CONFIG cannot tell a flat map (``compression.model_thresholds``) from a named container
+    (``providers``, ``lsp.servers``) — both are ``{}`` — so the first write of a dotted key into an
+    empty flat section nested a phantom (``z-ai/glm-5: {3: 0.9}``) that the runtime never reads.
+    """
+
+    def test_model_thresholds_dotted_key_written_flat(self, _isolated_hermes_home):
+        _write_config(_isolated_hermes_home, {"compression": {"model_thresholds": {}}})
+        set_config_value("compression.model_thresholds.z-ai/glm-5.3", "0.9")
+        saved = _read_config(_isolated_hermes_home)
+        assert saved["compression"]["model_thresholds"] == {"z-ai/glm-5.3": 0.9}
+
+    def test_get_reads_the_flat_key_back(self, _isolated_hermes_home, capsys):
+        _write_config(_isolated_hermes_home, {"compression": {"model_thresholds": {}}})
+        set_config_value("compression.model_thresholds.z-ai/glm-5.3", "0.9")
+        # The write landed on a flat key, not a nested phantom the runtime never reads.
+        assert _read_config(_isolated_hermes_home)["compression"]["model_thresholds"] == {
+            "z-ai/glm-5.3": 0.9
+        }
+        args = argparse.Namespace(
+            config_command="get", key="compression.model_thresholds.z-ai/glm-5.3", json=False,
+        )
+        config_command(args)
+        assert "0.9" in capsys.readouterr().out
+
+    def test_unset_removes_the_flat_key(self, _isolated_hermes_home):
+        _write_config(
+            _isolated_hermes_home, {"compression": {"model_thresholds": {"z-ai/glm-5.3": 0.9}}}
+        )
+        args = argparse.Namespace(
+            config_command="unset", key="compression.model_thresholds.z-ai/glm-5.3",
+        )
+        config_command(args)
+        saved = _read_config(_isolated_hermes_home)
+        assert "z-ai/glm-5.3" not in saved.get("compression", {}).get("model_thresholds", {})
+
+    def test_explicit_escape_still_lands_on_the_same_key(self, _isolated_hermes_home):
+        _write_config(_isolated_hermes_home, {"compression": {"model_thresholds": {}}})
+        set_config_value("compression.model_thresholds.z-ai/glm-5\\.3", "0.9")
+        saved = _read_config(_isolated_hermes_home)
+        assert saved["compression"]["model_thresholds"] == {"z-ai/glm-5.3": 0.9}
+
+    def test_auxiliary_extra_body_dotted_key_written_flat(self, _isolated_hermes_home):
+        _write_config(_isolated_hermes_home, {"auxiliary": {"compression": {"extra_body": {}}}})
+        set_config_value("auxiliary.compression.extra_body.some.nested.key", "1")
+        saved = _read_config(_isolated_hermes_home)
+        assert saved["auxiliary"]["compression"]["extra_body"] == {"some.nested.key": 1}
+
+    def test_matrix_channel_prompts_dotted_room_written_flat(self, _isolated_hermes_home):
+        _write_config(_isolated_hermes_home, {"matrix": {"channel_prompts": {}}})
+        set_config_value("matrix.channel_prompts.!room:example.org", "be brief")
+        saved = _read_config(_isolated_hermes_home)
+        assert saved["matrix"]["channel_prompts"] == {"!room:example.org": "be brief"}
+
+    def test_named_container_still_nests(self, _isolated_hermes_home):
+        """``lsp.servers.<id>.command`` is a named container, not a flat map: nesting is correct
+        and must not be escaped."""
+        _write_config(_isolated_hermes_home, {"lsp": {"servers": {}}})
+        set_config_value("lsp.servers.python.command", '["pylsp"]')
+        saved = _read_config(_isolated_hermes_home)
+        assert saved["lsp"]["servers"]["python"]["command"] == ["pylsp"]
+
+    def test_hook_still_nests(self, _isolated_hermes_home):
+        _write_config(_isolated_hermes_home, {"hooks": {}})
+        set_config_value("hooks.my-hook.enabled", "true")
+        saved = _read_config(_isolated_hermes_home)
+        assert saved["hooks"]["my-hook"]["enabled"] is True
+
+
 class TestBackwardCompatibility:
     def test_plain_nested_set(self, _isolated_hermes_home):
         set_config_value("terminal.backend", "docker")

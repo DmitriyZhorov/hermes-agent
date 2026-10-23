@@ -857,7 +857,7 @@ class TestLiteralDotKeyEscaping:
         (tmp_path / "config.yaml").write_text(_yaml.safe_dump(data, sort_keys=False))
 
     def test_split_key_path_escaped_dot(self):
-        from hermes_cli.config import _split_key_path
+        from hermes_cli.config_key_path import _split_key_path
 
         assert _split_key_path("providers.qwen3\\.5-397b.api_key") == [
             "providers", "qwen3.5-397b", "api_key",
