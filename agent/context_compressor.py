@@ -2027,14 +2027,14 @@ def _summarize_tool_result_unguarded(tool_name: str, tool_args: str, tool_conten
 
 def _model_threshold_key_rank(key: str, model: str, provider: str) -> tuple[int, int] | None:
     """Match rank for one ``model_thresholds`` key, or None when it does not apply.
-    ``"<provider>:<substr>"`` keys apply only on that provider; bare keys apply on every route.
-    The same slug means different windows on different routes (Codex caps Astra at 272K; OpenRouter
-    serves the full window), so a bare ``astra: 0.85`` written for Codex silently leaks everywhere.
-    Rank = (substring length, scoped): the most specific model match wins, scope breaks ties."""
+    ``"<provider>:<substr>"`` keys apply only on that provider; bare keys apply on every route; the
+    same slug means different windows on different routes (Codex caps Astra at 272K; OpenRouter serves
+    the full window), so a bare ``astra: 0.85`` written for Codex silently leaks everywhere. A key may
+    itself contain ``:`` (slugs do), falling back to a bare substring match. Rank: (len, scoped)."""
     scope, sep, substr = key.partition(":")
-    if not sep:
-        return (len(key), 0) if key in model else None
-    return (len(substr), 1) if scope.strip().lower() == provider and substr in model else None
+    if sep and scope.strip().lower() == provider and substr in model:
+        return (len(substr), 1)
+    return (len(key), 0) if key in model else None
 
 
 def resolve_model_threshold(

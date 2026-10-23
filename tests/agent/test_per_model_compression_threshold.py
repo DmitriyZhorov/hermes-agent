@@ -126,6 +126,59 @@ class TestContextEngineModelThresholds:
 
 
 
+class TestColonInModelSlug:
+    """A model slug legitimately contains ``:`` (``:free`` / ``:batch`` / ``:us``),
+    which collides with the ``"<provider>:<substr>"`` scope separator.
+
+    ``_model_threshold_key_rank`` used to parse such a key as provider-scoped, so
+    ``{"meituan/longcat-2.5-preview:free": 0.9}`` matched nothing — the override was
+    silently inert while looking correctly written.
+    """
+
+    def test_colon_slug_key_matches_as_bare_substring(self):
+        overrides = {"meituan/longcat-2.5-preview:free": 0.90}
+        assert resolve_model_threshold(
+            "meituan/longcat-2.5-preview:free", overrides, 0.50, "nous"
+        ) == 0.90
+
+    def test_colon_slug_key_matches_on_any_provider(self):
+        """The bare fallback is route-agnostic, like every other bare key."""
+        overrides = {"z-ai/glm-5.3:free": 0.85}
+        for provider in ("nous", "openrouter", "openai-codex"):
+            assert resolve_model_threshold("z-ai/glm-5.3:free", overrides, 0.50, provider) == 0.85
+
+    def test_scoped_key_still_does_not_leak_to_other_providers(self):
+        """The fix must not reopen the leak that provider scoping was added for
+        (#fc3d60af09): a scoped key whose left side is not the session provider
+        keeps falling back to a bare match on the whole key, which the model slug
+        does not contain."""
+        overrides = {"openai-codex:astra": 0.85}
+        assert resolve_model_threshold("openai/gpt-6-astra", overrides, 0.50, "nous") == 0.50
+        assert resolve_model_threshold("openai/gpt-6-astra", overrides, 0.50, "openrouter") == 0.50
+
+    def test_scoped_key_still_wins_on_its_own_provider(self):
+        overrides = {"openai-codex:astra": 0.85}
+        assert resolve_model_threshold("gpt-6-astra", overrides, 0.50, "openai-codex") == 0.85
+
+    def test_longest_match_still_wins_between_bare_and_scoped(self):
+        """A longer bare key outranks a shorter scoped one, as before."""
+        both = {"nous:glm": 0.90, "z-ai/glm-5.3": 0.50}
+        assert resolve_model_threshold("z-ai/glm-5.3", both, 0.40, "nous") == 0.50
+
+    def test_compressor_applies_colon_slug_override(self):
+        """End-to-end: the override reaches the compressor's effective threshold."""
+        with patch("agent.context_compressor.get_model_context_length", return_value=1_048_576):
+            cc = ContextCompressor(
+                model="meituan/longcat-2.5-preview:free",
+                threshold_percent=0.50,
+                model_thresholds={"meituan/longcat-2.5-preview:free": 0.90},
+                quiet_mode=True,
+            )
+            _ = cc.context_length
+        assert cc.threshold_percent == 0.90
+        assert cc.threshold_tokens == int(1_048_576 * 0.90)
+
+
 class TestProviderScopedKeys:
     def test_scoped_key_applies_only_on_its_provider(self):
         overrides = {"openai-codex:astra": 0.85}
